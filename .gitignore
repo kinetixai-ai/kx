@@ -5,3 +5,7 @@ dist/
 *.egg-info/
 __pycache__/
 .pytest_cache/
+
+# egg-info (any depth)
+src/*.egg-info/
+**/*.egg-info/
