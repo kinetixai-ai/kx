@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kinetixai"
+version = "0.1.0"
+description = "KinetixAI command line: search papers across arXiv, Semantic Scholar and OpenAlex, look up researchers, and ask KinetixAI from your terminal."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Rohit S Patel" }]
+keywords = ["kinetixai", "research", "arxiv", "semantic-scholar", "openalex", "cli"]
+dependencies = [
+  "typer>=0.12,<1",
+  "httpx>=0.27,<1",
+  "rich>=13,<15",
+  "platformdirs>=4,<5",
+]
+
+[project.urls]
+Homepage = "https://kinetixai.ai"
+Documentation = "https://kinetixai.ai/cli/"
+
+[project.scripts]
+kx = "kinetixai.cli:app"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
