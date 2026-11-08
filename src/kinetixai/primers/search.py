@@ -23,7 +23,7 @@ from dataclasses import dataclass
 # matches ONLY one of these, with no other topic term, is almost always a
 # false positive from another discipline.
 AMBIGUOUS: dict[str, tuple[str, ...]] = {
-    "fusion": ("tokamak", "plasma", "nuclear", "iter", "confinement", "plasmas",
+    "fusion": ("tokamak", "plasma", "nuclear fusion", "iter", "confinement", "plasmas",
                "infrared", "visible image", "image fusion", "sensor fusion",
                "multimodal fusion", "facial", "wearable", "eeg", "plenoptic",
                "plasma physics", "plasma-facing", "deuterium", "tritium", "stellarator"),
@@ -67,6 +67,23 @@ def terms(text: str) -> set[str]:
     return out
 
 
+_WORD_CACHE: dict[str, re.Pattern] = {}
+
+
+def _marker(term: str) -> re.Pattern:
+    """Whole-word match for an ambiguity marker.
+
+    Substring matching was wrong and quietly costly: "iter" (for ITER, the
+    fusion reactor) matched "iterative", so real CUDA papers were dropped as
+    plasma physics.
+    """
+    pat = _WORD_CACHE.get(term)
+    if pat is None:
+        pat = re.compile(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])")
+        _WORD_CACHE[term] = pat
+    return pat
+
+
 @dataclass
 class Scored:
     paper: dict
@@ -96,9 +113,12 @@ def score_paper(paper: dict, topic_terms: set[str], ambiguous_in_topic: set[str]
                                        f"({', '.join(sorted(overlap)) or 'nothing'})")
 
     # Explicit other-discipline markers for the ambiguous words in this topic.
+    # A marker only counts when the paper does not also sit squarely in the
+    # topic's own field: "GPU ... iterative solver" is ours, "ITER plasma" is not.
+    strong = len(unambiguous_hits) >= 2
     for word in ambiguous_in_topic:
         for marker in AMBIGUOUS.get(word, ()):
-            if marker in hay:
+            if _marker(marker).search(hay) and not strong:
                 return Scored(paper, coverage, f"other field: '{marker}'")
 
     return Scored(paper, coverage + 0.1 * len(unambiguous_hits), "kept")

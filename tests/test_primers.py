@@ -751,3 +751,85 @@ def test_status_rows_cover_every_engine():
     assert {r["engine"] for r in rows} == set(pv.NAMES)
     for r in rows:
         assert r["kind"] in ("local", "hosted", "agent")
+
+
+# ── ambiguity markers must match whole words ──────────────────────────────
+
+def test_marker_matching_is_word_boundary_not_substring():
+    """'iter' (for ITER, the reactor) must not match 'iterative'."""
+    papers = [
+        {"title": "GPU implementation of a ray-surface intersection algorithm",
+         "abstract": "An iterative CUDA kernel for ray-surface intersection on the GPU."},
+        {"title": "CUDA-DClust+: Revisiting Early GPU-Accelerated DBSCAN Clustering",
+         "abstract": "We revisit GPU-accelerated DBSCAN with CUDA kernels."},
+    ]
+    kept, notes = primer_search.filter_sources(papers, "GPU & CUDA: Kernel Fusion")
+    assert len(kept) == 2, notes
+
+
+def test_real_plasma_physics_is_still_dropped():
+    papers = [{"title": "Challenges for AI to help deliver fusion energy",
+               "abstract": "Tokamak plasma control for nuclear fusion energy at ITER."}]
+    kept, notes = primer_search.filter_sources(papers, "GPU & CUDA: Kernel Fusion")
+    assert kept == [] and notes
+
+
+def test_a_strong_topic_match_survives_one_stray_marker():
+    """A CUDA paper that happens to say 'plasma' once is still a CUDA paper."""
+    papers = [{"title": "CUDA kernel fusion for GPU particle-in-cell simulation",
+               "abstract": "Fused CUDA kernels on the GPU for plasma simulation workloads."}]
+    kept, _ = primer_search.filter_sources(papers, "GPU & CUDA: Kernel Fusion")
+    assert len(kept) == 1
+
+
+# ── config validation ─────────────────────────────────────────────────────
+
+def test_primer_engine_setting_rejects_nonsense():
+    from kinetixai import config
+    with pytest.raises(ValueError, match="primer_engine must be"):
+        config.validate("primer_engine", "claude# 1. No flags")
+    with pytest.raises(ValueError, match="kx primers engines"):
+        config.validate("primer_engine", "gpt5-turbo-ultra")
+
+
+def test_primer_engine_setting_normalises_aliases():
+    from kinetixai import config
+    assert config.validate("primer_engine", "claude") == "anthropic"
+    assert config.validate("primer_engine", "lm-studio") == "lmstudio"
+    assert config.validate("primer_engine", "auto") == "auto"
+
+
+def test_optional_primer_settings_can_be_cleared():
+    from kinetixai import config
+    assert config.validate("primer_model", "") == ""
+    assert config.validate("primer_copy_to", "") == ""
+
+
+# ── copy-to ───────────────────────────────────────────────────────────────
+
+def test_copy_to_places_every_file_and_keeps_images_folder(tmp_path: Path, monkeypatch):
+    import kinetixai.primers.builder as b
+    monkeypatch.setattr(b, "_research", lambda topic, limit, warnings, relevance=0.18: [])
+    dest = tmp_path / "notes"
+    req = BuildRequest(topic="Shared Topic", pages=1, pdfs=1, images=1, jsons=1,
+                       engine="outline", out_dir=tmp_path / "out", copy_to=dest)
+    res = b.build(req)
+    names = sorted(p.name for p in dest.rglob("*") if p.is_file())
+    assert any(n.endswith(".pdf") for n in names)
+    assert any(n.endswith(".json") for n in names)
+    assert (dest / "images").is_dir()
+    assert len(res.copied) == len(res.files())
+
+
+def test_copy_to_failure_does_not_fail_the_build(tmp_path: Path, monkeypatch):
+    """A missing shared drive must not throw away a primer that was built."""
+    import kinetixai.primers.builder as b
+    monkeypatch.setattr(b, "_research", lambda topic, limit, warnings, relevance=0.18: [])
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("i am a file", encoding="utf-8")
+    req = BuildRequest(topic="T", pages=1, pdfs=1, engine="outline",
+                       out_dir=tmp_path / "out", copy_to=blocker)
+    res = b.build(req)
+    assert res.pdf_paths and res.pdf_paths[0].is_file()   # the build still stands
+    assert res.copied == []
+    assert any("could not copy" in w for w in res.warnings)

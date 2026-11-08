@@ -662,6 +662,10 @@ def _run_build(req, json_out: bool):
             output.console.print(f"  {label:>4}  {p}")
     if d["html"]:
         output.console.print(f"  html  {d['html']}  [dim](editable)[/dim]")
+    if d.get("copied"):
+        folder = Path(d["copied"][0]).parent
+        folder = folder.parent if folder.name == "images" else folder
+        output.console.print(f"  [green]copied[/green] {len(d['copied'])} files to {folder}")
 
 
 @primers_app.command("build")
@@ -700,6 +704,10 @@ def primers_build(
     verify_citations: bool = typer.Option(False, "--verify-citations",
                                           help="Re-resolve every citation; drop any that fail."),
     out_dir: Path = typer.Option(Path("./dist/primers"), "--out-dir", "-o"),
+    copy_to: Optional[Path] = typer.Option(None, "--copy-to",
+                                           help="Also copy the finished files here, e.g. a notes "
+                                                "folder or a shared drive. Set a permanent one with "
+                                                "`kx config set primer_copy_to <folder>`."),
     json_out: bool = JSON,
 ) -> None:
     """Research, synthesize and compile a 'Story to Silicon' Primer bundle."""
@@ -717,7 +725,8 @@ def primers_build(
         watermark=watermark, author=author, engine=engine, model=model,
         api_base=api_base, num_ctx=num_ctx, mode=mode_v,
         min_sections=min_sections, relevance=relevance,
-        verify_citations=verify_citations, out_dir=out_dir)
+        verify_citations=verify_citations, out_dir=out_dir,
+        copy_to=copy_to or (config.get("primer_copy_to", "") or None))
     _run_build(req, json_out)
 
 
@@ -792,6 +801,8 @@ def convert(
     mode: str = typer.Option("iterative", "--mode"),
     out: Optional[Path] = typer.Option(None, "--out", "-o",
                                        help="Output PDF path (its folder receives the other artifacts)."),
+    copy_to: Optional[Path] = typer.Option(None, "--copy-to",
+                                           help="Also copy the finished files here."),
     json_out: bool = JSON,
 ) -> None:
     """Convert an existing deck, paper or repo into the TriFleet 8-page format."""
@@ -806,7 +817,8 @@ def convert(
         watermark=watermark, author=author, engine=engine, model=model,
         api_base=api_base, num_ctx=num_ctx,
         mode="iterative" if mode.startswith("iterative") else mode,
-        out_dir=out_dir, style=style)
+        out_dir=out_dir, style=style,
+        copy_to=copy_to or (config.get("primer_copy_to", "") or None))
     from .primers import builder as pb
     if out:  # honor the exact --out filename
         orig_slug = pb.slugify(name)

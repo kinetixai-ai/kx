@@ -67,6 +67,7 @@ kx primers build --topic "GPU & CUDA: Kernel Fusion" \
   --engine claude --verify-citations --out-dir ./dist/primers/gpu
 kx convert ./TriParseGPU_Deck.pptx --style trifleet-8page --pages 8 -o ./TriParseGPU_8p.pdf
 kx primers autobuild --manifest ./primers_catalog.yaml --parallel 4   # all 18 tracks
+kx primers build --topic "Types of RAG" --copy-to ~/Notes/primers     # second home
 
 # account (optional; only kx ask uses it)
 kx login                             # paste a token from https://kinetixai.ai/account/tokens/
@@ -106,6 +107,13 @@ kx primers build --topic "Types of RAG"
 
 Ollama's 4096-token context is too small for a full page, so kx uses Ollama's
 native API and asks for 32768; `--num-ctx` or `KX_OLLAMA_NUM_CTX` changes it.
+
+`--copy-to` (or `kx config set primer_copy_to <folder>`) puts a second copy of
+the finished files wherever you keep things — a notes folder, a shared drive, a
+repo. If that folder is unreachable the build still succeeds and says so.
+
+Full reference, including every option and a quick start for each kind of
+reader: [docs/PRIMERS.md](docs/PRIMERS.md).
 
 ### From an agent instead of the terminal
 

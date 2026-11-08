@@ -32,8 +32,12 @@ DEFAULTS: dict = {
     "primer_engine": "auto",
     "primer_model": "",
     "primer_watermark": "Narmadya Innovations",
+    # Where finished primers are copied in addition to --out-dir.
+    "primer_copy_to": "",
 }
 INT_KEYS = {"limit"}
+# Settings that may be set back to empty to turn them off.
+BLANKABLE = {"primer_model", "primer_copy_to"}
 URL_KEYS = {"endpoint", "ollama_url"}
 TOKEN_STORES = {"auto", "file"}
 KEYS = set(DEFAULTS) | {"token_store"}
@@ -68,9 +72,25 @@ def validate(key: str, value):
         if isinstance(value, bool) or not str(value).isdigit() or not 1 <= int(value) <= 100:
             raise ValueError(f"{key} must be a whole number from 1 to 100.")
         return int(value)
+    if key in BLANKABLE and (value is None or str(value).strip() == ""):
+        return ""                       # clearing an optional setting
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} must be text.")
     value = value.strip()
+    if key == "primer_engine":
+        from .primers import providers        # cheap: no httpx at import time
+        name = providers.resolve(value)
+        if name != "auto" and name not in providers.PROVIDERS:
+            raise ValueError(
+                f"primer_engine must be 'auto' or one of: "
+                f"{', '.join(providers.NAMES)}. Run `kx primers engines` to see "
+                f"which are ready. Got {value!r}.")
+        return name
+    if key == "primer_copy_to":
+        folder = Path(value).expanduser()
+        if folder.exists() and not folder.is_dir():
+            raise ValueError(f"primer_copy_to must be a folder, and {folder} is a file.")
+        return str(folder)
     if key in URL_KEYS:
         if not valid_url(value):
             raise ValueError(f"{key} must be an http(s) URL like https://kinetixai.ai, not {value!r}.")

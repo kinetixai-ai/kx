@@ -1,6 +1,16 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- `--copy-to` (and `kx config set primer_copy_to`) copies finished primers to a
+  second folder — a notes directory, a shared drive, a repo. A destination that
+  cannot be written is a warning, never a lost build.
+- `kx config set primer_engine` now rejects an unknown engine and lists the
+  valid ones instead of accepting it and failing later.
+- Citation filtering matched ambiguous markers as substrings, so "iter" (for
+  ITER, the fusion reactor) matched "iterative" and dropped real CUDA papers.
+  Markers are whole-word now, and a paper that matches the topic strongly
+  survives one stray marker.
+- Full Primers reference in docs/PRIMERS.md.
 - 22 engines, from one registry: self-hosted and open source (Ollama, vLLM,
   llama.cpp, LM Studio, Jan, LocalAI, TGI, text-generation-webui, llamafile),
   hosted (Claude, OpenAI, Gemini, Groq, OpenRouter, Together, DeepSeek,

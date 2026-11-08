@@ -52,6 +52,7 @@ class BuildRequest:
     relevance: float = 0.18
     research_limit: int = 12
     out_dir: Path = Path("./dist/primers")
+    copy_to: Path | None = None        # a second home for the finished files
     style: str = "trifleet-8page"
 
 
@@ -63,6 +64,7 @@ class BuildResult:
     png_paths: list[Path] = field(default_factory=list)
     pptx_paths: list[Path] = field(default_factory=list)
     json_paths: list[Path] = field(default_factory=list)
+    copied: list[Path] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -75,8 +77,17 @@ class BuildResult:
             "ppts": [str(p) for p in self.pptx_paths],
             "json": [str(p) for p in self.json_paths],
             "citations": len(self.primer.citations),
+            "copied": [str(p) for p in self.copied],
             "warnings": self.warnings,
         }
+
+    def files(self) -> list[Path]:
+        """Everything this build produced, in the order it is reported."""
+        out = list(self.pdf_paths) + list(self.png_paths) + list(self.pptx_paths)
+        out += list(self.json_paths)
+        if self.html_path:
+            out.append(self.html_path)
+        return out
 
 
 def slugify(text: str) -> str:
@@ -321,4 +332,37 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
         log("exporting Paper Lab JSON bundle…")
         result.json_paths.append(jsonx.primer_to_json(primer.to_dict(),
                                                       out_dir / f"{slug}.json"))
+
+    # 6. optional second home (a notes folder, a shared drive, a repo)
+    if req.copy_to:
+        log(f"copying to {req.copy_to}…")
+        result.copied, notes = _copy_out(result.files(), Path(req.copy_to), slug)
+        warnings.extend(notes)
     return result
+
+
+def _copy_out(files: list[Path], dest: Path, slug: str) -> tuple[list[Path], list[str]]:
+    """Copy finished files into dest, keeping the images/ subfolder shape.
+
+    Never raises: a build that succeeded should not be reported as failed
+    because a shared drive was not mounted.
+    """
+    import shutil
+
+    notes: list[str] = []
+    dest = dest.expanduser()
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return [], [f"could not copy to {dest} ({exc.strerror or exc}); "
+                    "the files are still in the output folder"]
+    written: list[Path] = []
+    for src in files:
+        try:
+            target = dest / ("images" if src.parent.name == "images" else "") / src.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+            written.append(target)
+        except OSError as exc:
+            notes.append(f"could not copy {src.name} to {dest} ({exc.strerror or exc})")
+    return written, notes
