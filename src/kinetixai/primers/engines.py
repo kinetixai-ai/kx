@@ -290,12 +290,15 @@ def complete(engine: str, model: str | None, system: str, user: str,
     base = providers.base_url(p, api_base)
     key = providers.api_key(p)
     if p.keys and not key and not p.local:
-        raise EngineError(
-            f"set {p.keys[0]} to use --engine {p.name} ({p.label}).")
+        raise EngineError(f"set {p.keys[0]} to use --engine {p.name} ({p.label}).")
+    if not model and p.local:
+        # A local server serves whatever is loaded; ask it rather than
+        # demanding --model for something the user cannot easily name.
+        served = providers.models(p)
+        model = served[0] if served else "local-model"
     if not model:
         raise EngineError(
-            f"--engine {p.name} has no default model; pass --model "
-            "(whatever your server has loaded).")
+            f"--engine {p.name} has no default model; pass --model.")
     return _openai_compatible(base, model, system, user, key=key, max_tokens=max_tokens)
 
 

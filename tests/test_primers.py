@@ -703,14 +703,15 @@ def test_openai_compatible_providers_share_one_path(monkeypatch):
 
 
 def test_pick_prefers_a_running_local_server(monkeypatch):
-    monkeypatch.setattr(pv, "reachable", lambda p, timeout=1.5: p.name == "lmstudio")
+    monkeypatch.setattr(pv, "models",
+                        lambda p, timeout=2.0: ["qwen2.5-7b"] if p.name == "lmstudio" else [])
     monkeypatch.setenv("OPENAI_API_KEY", "x")          # a key exists, but local wins
     name, why = pv.pick()
-    assert name == "lmstudio" and "LM Studio" in why
+    assert name == "lmstudio" and "LM Studio" in why and "qwen2.5-7b" in why
 
 
 def test_pick_falls_back_to_a_configured_key(monkeypatch):
-    monkeypatch.setattr(pv, "reachable", lambda p, timeout=1.5: False)
+    monkeypatch.setattr(pv, "models", lambda p, timeout=2.0: [])
     for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         monkeypatch.delenv(env, raising=False)
     monkeypatch.setenv("GROQ_API_KEY", "x")
@@ -719,7 +720,7 @@ def test_pick_falls_back_to_a_configured_key(monkeypatch):
 
 
 def test_pick_explains_itself_when_nothing_is_available(monkeypatch):
-    monkeypatch.setattr(pv, "reachable", lambda p, timeout=1.5: False)
+    monkeypatch.setattr(pv, "models", lambda p, timeout=2.0: [])
     for p in pv.PROVIDERS.values():
         for env in p.keys:
             monkeypatch.delenv(env, raising=False)
@@ -833,3 +834,94 @@ def test_copy_to_failure_does_not_fail_the_build(tmp_path: Path, monkeypatch):
     assert res.pdf_paths and res.pdf_paths[0].is_file()   # the build still stands
     assert res.copied == []
     assert any("could not copy" in w for w in res.warnings)
+
+
+# ── wrong server on a busy port, and failures that explain themselves ─────
+
+def _fake_http(monkeypatch, payload, status=200):
+    """providers.models imports httpx locally, so patch the module itself."""
+    import httpx
+
+    class R:
+        status_code = status
+        @staticmethod
+        def json():
+            return payload
+
+    class C:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url): return R()
+
+    monkeypatch.setattr(httpx, "Client", C)
+
+
+def test_a_plain_web_server_is_not_an_inference_server(monkeypatch):
+    """8080 is a busy port. Anything answering there is not necessarily a model."""
+    _fake_http(monkeypatch, {"message": "hello from a dev server"})
+    assert pv.models(pv.PROVIDERS["llamacpp"]) == []
+    assert pv.reachable(pv.PROVIDERS["llamacpp"]) is False
+
+
+def test_an_openai_model_list_is_recognised(monkeypatch):
+    _fake_http(monkeypatch, {"data": [{"id": "qwen2.5-7b"}, {"id": "phi-4"}]})
+    assert pv.models(pv.PROVIDERS["llamacpp"]) == ["qwen2.5-7b", "phi-4"]
+    assert pv.reachable(pv.PROVIDERS["llamacpp"]) is True
+
+
+def test_an_ollama_model_list_is_recognised(monkeypatch):
+    _fake_http(monkeypatch, {"models": [{"name": "llama3.1:8b"}]})
+    assert pv.models(pv.PROVIDERS["ollama"]) == ["llama3.1:8b"]
+
+
+def test_a_non_200_is_not_reachable(monkeypatch):
+    _fake_http(monkeypatch, {"data": []}, status=404)
+    assert pv.models(pv.PROVIDERS["lmstudio"]) == []
+
+
+def test_local_engine_asks_the_server_which_model_it_serves(monkeypatch):
+    """llama.cpp and LM Studio serve whatever is loaded; demanding --model
+    for a name the user cannot easily give is the wrong default."""
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(e.providers, "models", lambda p, timeout=2.0: ["loaded-model"])
+    seen = {}
+
+    class R:
+        status_code = 200
+        text = ""
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    class C:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json=None, headers=None):
+            seen["model"] = json["model"]
+            return R()
+
+    monkeypatch.setattr(e.httpx, "Client", C)
+    e.complete("llamacpp", None, "s", "u")
+    assert seen["model"] == "loaded-model"
+
+
+def test_every_page_failing_reports_why(tmp_path: Path, monkeypatch):
+    """The per-page reasons are the diagnosis; a generic message is useless."""
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(b, "_research", lambda topic, limit, warnings, relevance=0.18: [])
+
+    def always_fails(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
+        raise e.EngineError("HTTP 400: no model is loaded")
+
+    monkeypatch.setattr(e, "complete", always_fails)
+    req = BuildRequest(topic="T", pages=3, pdfs=0, jsons=0, engine="llamacpp",
+                       mode="iterative", out_dir=tmp_path / "d")
+    with pytest.raises(e.EngineError) as excinfo:
+        b.build(req)
+    message = str(excinfo.value)
+    assert "no model is loaded" in message          # the real cause survives
+    assert "llamacpp" in message                    # and which engine it was
+    assert "kx primers engines" in message          # and what to do next

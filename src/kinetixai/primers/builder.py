@@ -186,9 +186,17 @@ def _synthesize_iterative(req: BuildRequest, sources: list[dict], source_text: s
         titles.append(page.title)
 
     if not primer.pages:
+        # The per-page reasons were the whole diagnosis and used to be
+        # thrown away with the warnings; a generic message left the user
+        # with nothing to act on.
+        reasons = [w for w in warnings if ") failed" in w]
+        detail = ("\n  " + "\n  ".join(reasons[:3])) if reasons else ""
+        more = f"\n  (and {len(reasons) - 3} more)" if len(reasons) > 3 else ""
         raise engines.EngineError(
-            "every page failed to generate. Check the engine and model, or use "
-            "--engine outline for a draft without an LLM.")
+            f"every page failed to generate with engine '{req.engine}'."
+            + detail + more
+            + "\n\nTry `kx primers engines` to see what is ready, pass --engine "
+              "explicitly, or use --engine outline for a draft without a model.")
     return primer
 
 

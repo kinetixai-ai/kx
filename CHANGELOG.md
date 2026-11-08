@@ -1,6 +1,15 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- Auto engine selection probed a port and accepted any answer under HTTP 500,
+  so a plain web server on 8080 could be chosen as an inference server. The
+  probe now requires a real model list, and the chosen engine is reported with
+  the model it is serving.
+- A local server (llama.cpp, LM Studio, Jan, LocalAI) serves whatever is
+  loaded, so kx asks it for the model name instead of refusing without
+  `--model`.
+- When every page fails, the per-page reasons are reported. They were being
+  collected and then thrown away behind a generic message.
 - `kx doctor` now reports which build is actually running (interpreter and
   package path), lists the commands that build exposes, and checks the
   `primers` extra. A stale install on PATH used to look identical to a current

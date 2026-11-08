@@ -159,19 +159,45 @@ def configured(p: Provider) -> bool:
     return api_key(p) is not None or (p.local and p.name == "vllm")
 
 
-def reachable(p: Provider, timeout: float = 1.5) -> bool | None:
-    """Is a local server answering? None when the question does not apply."""
-    if not p.local or p.protocol in ("mcp", "none"):
-        return None
+def _probe_url(p: Provider) -> str:
+    url = base_url(p).rstrip("/")
+    if p.protocol == "ollama":
+        return (url[:-3].rstrip("/") if url.endswith("/v1") else url) + "/api/tags"
+    return url + "/models"
+
+
+def models(p: Provider, timeout: float = 2.0) -> list[str]:
+    """Model ids a local server is serving, newest API shape first.
+
+    Doubles as the reachability test: a port answering with something that
+    is not a model list is not an inference server. 8080 and 1234 are busy
+    ports on a developer's machine, and picking the wrong listener and
+    failing eight times is worse than not finding one.
+    """
     import httpx
-    url = base_url(p)
-    probe = url.rstrip("/")
-    probe = probe[:-3].rstrip("/") + "/api/tags" if p.protocol == "ollama" else probe + "/models"
     try:
         with httpx.Client(timeout=timeout) as client:
-            return client.get(probe).status_code < 500
-    except Exception:  # noqa: BLE001 — unreachable is an answer, not an error
-        return False
+            r = client.get(_probe_url(p))
+        if r.status_code != 200:
+            return []
+        data = r.json()
+    except Exception:  # noqa: BLE001 — not an inference server, or not up
+        return []
+    if not isinstance(data, dict):
+        return []
+    if isinstance(data.get("data"), list):            # OpenAI shape
+        return [str(m.get("id")) for m in data["data"] if isinstance(m, dict) and m.get("id")]
+    if isinstance(data.get("models"), list):          # Ollama shape
+        return [str(m.get("name") or m.get("model")) for m in data["models"]
+                if isinstance(m, dict) and (m.get("name") or m.get("model"))]
+    return []
+
+
+def reachable(p: Provider, timeout: float = 2.0) -> bool | None:
+    """Is a local inference server answering here? None when it does not apply."""
+    if not p.local or p.protocol in ("mcp", "none"):
+        return None
+    return bool(models(p, timeout))
 
 
 def pick(prefer: str | None = None, check_local: bool = True) -> tuple[str, str]:
@@ -182,8 +208,13 @@ def pick(prefer: str | None = None, check_local: bool = True) -> tuple[str, str]
     for name in AUTO_ORDER:
         p = PROVIDERS[name]
         if p.local:
-            if check_local and reachable(p):
-                return name, f"{p.label} is running at {base_url(p)}"
+            if not check_local:
+                continue
+            served = models(p)
+            if served:
+                return name, (f"{p.label} at {base_url(p)} is serving "
+                              f"{served[0]}" + (f" (+{len(served) - 1} more)"
+                                                if len(served) > 1 else ""))
         elif api_key(p):
             return name, f"{p.keys[0]} is set"
     return "outline", ("no model engine found — writing a structural draft. "
