@@ -60,10 +60,11 @@ kx mcp --config goose                # also: claude-desktop, cline, continue, op
 kx mcp                               # run the server
 
 # Primers: topic or source -> styled PDF / PNG / PPTX / JSON  (pip install 'kinetixai[primers]')
-kx primers build --topic "GPU & CUDA: Kernel Fusion & Quantization" \
+kx primers engines                   # what can write a primer, and what is ready
+kx primers build --topic "Types of RAG"            # picks an engine for you
+kx primers build --topic "GPU & CUDA: Kernel Fusion" \
   --persona student,professional --pages 8 --pdfs 1 --ppts 1 --images 8 --json-bundles 1 \
-  --engine local-vllm --model Qwen/Qwen2.5-14B-Instruct --verify-citations \
-  --out-dir ./dist/primers/gpu
+  --engine claude --verify-citations --out-dir ./dist/primers/gpu
 kx convert ./TriParseGPU_Deck.pptx --style trifleet-8page --pages 8 -o ./TriParseGPU_8p.pdf
 kx primers autobuild --manifest ./primers_catalog.yaml --parallel 4   # all 18 tracks
 
@@ -79,6 +80,49 @@ not `kx --json search`): ASCII-safe JSON on stdout, errors on stderr, exit code 
 on failure, 2 on bad usage.
 
 ## Primers ("Story to Silicon")
+
+### Picking an engine
+
+`kx primers engines` lists every backend and marks the ones ready to use.
+With no `--engine`, kx picks one: a local server if it finds one running
+(nothing per page), otherwise a provider whose API key is set. It says which
+it chose and why.
+
+| Where it runs | Engines |
+|---|---|
+| Your machine, open source | `ollama`, `vllm`, `llamacpp`, `lmstudio`, `jan`, `localai`, `tgi`, `textgen`, `llamafile` |
+| Hosted | `claude`, `openai`, `gemini`, `groq`, `openrouter`, `together`, `deepseek`, `mistral`, `fireworks`, `cerebras`, `xai` |
+| No key at all | `mcp` (the agent calling kx writes the pages), `outline` (deterministic draft) |
+
+Any endpoint can be moved with `--api-base` or the provider's `*_BASE_URL`
+variable, so a changed URL does not need a new release. Set a default once and
+drop the flags:
+
+```bash
+kx config set primer_engine claude      # or ollama, groq, lmstudio, mcp ...
+kx config set primer_model  claude-sonnet-4-5
+kx primers build --topic "Types of RAG"
+```
+
+Ollama's 4096-token context is too small for a full page, so kx uses Ollama's
+native API and asks for 32768; `--num-ctx` or `KX_OLLAMA_NUM_CTX` changes it.
+
+### From an agent instead of the terminal
+
+`kx mcp serve` exposes `build_primer`, `convert_document`,
+`search_verified_papers` and the research tools over MCP, so Claude Code,
+Claude Desktop, Cursor, Gemini CLI, Codex, VS Code, Zed, Goose, Cline,
+Continue and OpenHands can drive kx in plain language. `kx mcp install
+<client>` prints the configuration for each.
+
+```bash
+claude mcp add kx -- kx mcp serve      # then just ask for a primer
+```
+
+With `engine: "mcp"` the host's own model writes the pages, so no API key and
+no local model are needed. Sampling is optional in the MCP protocol, so a
+client that lacks it gets a clear message naming the alternatives.
+
 
 `kx primers build` researches a topic (federated arXiv + Semantic Scholar +
 OpenAlex), optionally ingests a source (`--source` takes a .pptx, .pdf, .md,

@@ -21,14 +21,15 @@ import textwrap
 import httpx
 
 from .. import config
+from . import providers
 from .schema import (WORDS_MAX, Page, Primer, PrimerSchemaError, page_from_dict,
                      primer_from_dict)
 
-# Canonical names, plus the aliases people actually type.
-ALIASES = {"vllm": "local-vllm", "claude": "anthropic", "google": "gemini",
-           "gpt": "openai", "none": "outline", "offline": "outline"}
-ENGINES = ("local-vllm", "ollama", "openai", "anthropic", "gemini", "mcp", "outline")
-ALL_ENGINE_NAMES = tuple(sorted(set(ENGINES) | set(ALIASES)))
+# Every engine comes from the provider registry, so adding a backend is a
+# row in providers.py rather than a branch here.
+ENGINES = providers.NAMES
+ALL_ENGINE_NAMES = providers.ALL_NAMES
+ALIASES = providers.ALIASES
 TIMEOUT = httpx.Timeout(float(os.environ.get("KX_LLM_TIMEOUT", "600")), connect=15.0)
 
 # Ollama defaults to a 4096-token context, which the Primer system prompt plus
@@ -48,8 +49,9 @@ class EngineError(RuntimeError):
 
 
 def canonical(engine: str) -> str:
+    """'claude' -> 'anthropic', 'lm-studio' -> 'lmstudio', 'auto' -> 'auto'."""
     name = (engine or "").strip().lower()
-    return ALIASES.get(name, name)
+    return name if name == "auto" else providers.resolve(name)
 
 
 def _strip_fences(text: str) -> str:
@@ -261,32 +263,40 @@ def _mcp(system: str, user: str) -> str:
 def complete(engine: str, model: str | None, system: str, user: str,
              api_base: str | None = None, max_tokens: int = MAX_TOKENS,
              num_ctx: int | None = None) -> str:
-    name = canonical(engine)
-    if name == "local-vllm":
-        base = (api_base or os.environ.get("KX_VLLM_URL")
-                or os.environ.get("VLLM_BASE_URL") or "http://localhost:8000/v1")
-        return _openai_compatible(base, model or "Qwen/Qwen2.5-14B-Instruct", system, user,
-                                  key=os.environ.get("KX_VLLM_KEY"), max_tokens=max_tokens)
-    if name == "ollama":
-        base = (api_base or os.environ.get("OLLAMA_HOST")
-                or config.get("ollama_url", "http://localhost:11434")).rstrip("/")
+    p = providers.get(engine)
+    if p is None:
+        raise EngineError(f"unknown engine '{engine}'. Engines: "
+                          + ", ".join(providers.ALL_NAMES))
+    model = model or p.default_model or None
+
+    if p.protocol == "mcp":
+        return _mcp(system, user)
+    if p.protocol == "none":
+        raise EngineError("the 'outline' engine writes no text; it is handled by the builder.")
+    if p.protocol == "anthropic":
+        return _anthropic(model or "claude-sonnet-4-5", system, user)
+    if p.protocol == "gemini":
+        return _gemini(model or "gemini-2.0-flash", system, user)
+    if p.protocol == "ollama":
+        base = api_base or providers.base_url(p)
+        if not api_base:
+            base = config.get("ollama_url", base)
+        base = base.rstrip("/")
         base = base[:-3].rstrip("/") if base.endswith("/v1") else base
         return _ollama_native(base, model or config.get("ollama_model", "llama3.1"),
                               system, user, max_tokens, num_ctx or OLLAMA_NUM_CTX)
-    if name == "openai":
-        key = os.environ.get("OPENAI_API_KEY")
-        if not key:
-            raise EngineError("set OPENAI_API_KEY to use --engine openai.")
-        return _openai_compatible(api_base or "https://api.openai.com/v1",
-                                  model or "gpt-4o-mini", system, user, key=key,
-                                  max_tokens=max_tokens)
-    if name == "anthropic":
-        return _anthropic(model or "claude-sonnet-4-5", system, user)
-    if name == "gemini":
-        return _gemini(model or "gemini-2.0-flash", system, user)
-    if name == "mcp":
-        return _mcp(system, user)
-    raise EngineError(f"unknown engine '{engine}'. Engines: {', '.join(ALL_ENGINE_NAMES)}")
+
+    # everything else speaks the OpenAI chat format
+    base = providers.base_url(p, api_base)
+    key = providers.api_key(p)
+    if p.keys and not key and not p.local:
+        raise EngineError(
+            f"set {p.keys[0]} to use --engine {p.name} ({p.label}).")
+    if not model:
+        raise EngineError(
+            f"--engine {p.name} has no default model; pass --model "
+            "(whatever your server has loaded).")
+    return _openai_compatible(base, model, system, user, key=key, max_tokens=max_tokens)
 
 
 RETRY_NUDGE = ("\n\nYour last reply could not be parsed. Reply with the JSON object "

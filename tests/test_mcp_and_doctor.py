@@ -12,6 +12,23 @@ runner = CliRunner()
 FIXTURE = Path(__file__).parent / "fixtures" / "papers.json"
 
 
+def _server_entries(cfg):
+    """Every client nests the server differently (mcpServers, servers,
+    context_servers), so find the entries rather than assuming a shape."""
+    found = []
+    def walk(node):
+        if isinstance(node, dict):
+            if "args" in node or ("command" in node and isinstance(node["command"], (str, dict))):
+                found.append(node)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(cfg)
+    return found
+
+
 @pytest.mark.parametrize("client", list(mcp_server.CLIENTS))
 def test_every_client_has_a_snippet(client):
     res = runner.invoke(cli.app, ["mcp", "--config", client, "--json"])
@@ -19,8 +36,10 @@ def test_every_client_has_a_snippet(client):
     snip = json.loads(res.stdout)
     assert "mcp" in snip["snippet"] and snip["file"]
     if snip["format"] == "json":
-        cfg = json.loads(snip["snippet"])
-        assert cfg["mcpServers"]["kinetixai"]["args"] == ["mcp", "serve"]
+        entries = _server_entries(json.loads(snip["snippet"]))
+        assert entries, snip["snippet"]
+        args = [e.get("args") or (e.get("command") or {}).get("args") for e in entries]
+        assert ["mcp", "serve"] in args, snip["snippet"]
 
 
 def test_windows_paths_are_escaped_in_every_format():
@@ -28,7 +47,11 @@ def test_windows_paths_are_escaped_in_every_format():
     for client in mcp_server.CLIENTS:
         s = mcp_server.config_snippet(client, cmd)["snippet"]
         if s.lstrip().startswith("{"):
-            assert json.loads(s)["mcpServers"]["kinetixai"]["command"] == cmd
+            commands = []
+            for e in _server_entries(json.loads(s)):
+                c = e.get("command")
+                commands.append(c.get("path") if isinstance(c, dict) else c)
+            assert cmd in commands, s
         elif client not in ("open-webui", "claude-code"):
             assert json.dumps(cmd) in s  # double-quoted, backslashes escaped (YAML/TOML-safe)
 

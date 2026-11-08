@@ -28,6 +28,10 @@ DEFAULTS: dict = {
     "ollama_url": "http://localhost:11434",
     "ollama_model": "llama3.1",
     "embed_model": "nomic-embed-text",
+    # Primers: remembered so `kx primers build --topic X` needs no flags.
+    "primer_engine": "auto",
+    "primer_model": "",
+    "primer_watermark": "Narmadya Innovations",
 }
 INT_KEYS = {"limit"}
 URL_KEYS = {"endpoint", "ollama_url"}

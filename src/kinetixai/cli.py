@@ -622,8 +622,10 @@ def _primer_errors():
 
 
 def _check_engine(engine: str, primers_engines) -> str:
-    """Accept any alias (vllm, claude, ...) and return the canonical name."""
+    """Accept any alias (claude, lm-studio, ...) and return the canonical name."""
     name = primers_engines.canonical(engine)
+    if name == "auto":
+        return name
     if name not in primers_engines.ENGINES:
         output.error(f"--engine must be one of: {', '.join(primers_engines.ALL_ENGINE_NAMES)}")
         raise typer.Exit(code=2)
@@ -679,8 +681,10 @@ def primers_build(
     watermark: str = typer.Option("Narmadya Innovations", "--watermark",
                                   help="Running header/footer watermark."),
     author: str = typer.Option("Rohit Patel", "--author"),
-    engine: str = typer.Option("outline", "--engine",
-                               help="outline (no LLM) | ollama | vllm | claude | gemini | openai | mcp"),
+    engine: Optional[str] = typer.Option(None, "--engine",
+                                         help="auto | ollama | vllm | lmstudio | llamacpp | claude | "
+                                              "gemini | openai | groq | openrouter | mcp | outline ... "
+                                              "(`kx primers engines` lists all)"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Model name for the chosen engine."),
     api_base: Optional[str] = typer.Option(None, "--api-base",
                                            help="Override the engine's endpoint, e.g. http://localhost:8000/v1"),
@@ -700,7 +704,8 @@ def primers_build(
 ) -> None:
     """Research, synthesize and compile a 'Story to Silicon' Primer bundle."""
     primers_builder, _, primers_engines, _, _ = _primer_deps()
-    engine = _check_engine(engine, primers_engines)
+    engine = _check_engine(engine or config.get("primer_engine", "auto"), primers_engines)
+    model = model or (config.get("primer_model", "") or None)
     mode_v = "iterative" if mode.startswith("iterative") else mode
     if mode_v not in primers_builder.MODES:
         output.error(f"--mode must be one of: {', '.join(primers_builder.MODES)}")
@@ -714,6 +719,26 @@ def primers_build(
         min_sections=min_sections, relevance=relevance,
         verify_citations=verify_citations, out_dir=out_dir)
     _run_build(req, json_out)
+
+
+@primers_app.command("engines")
+def primers_engines_cmd(
+    check: bool = typer.Option(True, "--check/--no-check",
+                               help="Probe local servers to see which are running."),
+    json_out: bool = JSON,
+) -> None:
+    """List every engine a Primer can be written with, and which are ready."""
+    _primer_deps()
+    from .primers import providers as pv
+    rows = pv.status(check_local=check)
+    if json_out:
+        chosen, why = pv.pick(check_local=check)
+        output.emit_json({"engines": rows, "auto": {"engine": chosen, "why": why}})
+        return
+    output.engines_table(rows)
+    chosen, why = pv.pick(check_local=check)
+    output.console.print(f"\n[dim]auto would use:[/dim] [bold]{chosen}[/bold]  [dim]({why})[/dim]")
+    output.console.print("[dim]Set a default:[/dim] kx config set primer_engine <name>")
 
 
 @primers_app.command("autobuild")
@@ -758,8 +783,9 @@ def convert(
     json_n: int = typer.Option(0, "--json-bundles", min=0),
     watermark: str = typer.Option("Narmadya Innovations", "--watermark"),
     author: str = typer.Option("Rohit Patel", "--author"),
-    engine: str = typer.Option("outline", "--engine",
-                               help="outline (no LLM) | ollama | vllm | claude | gemini | openai | mcp"),
+    engine: Optional[str] = typer.Option(None, "--engine",
+                                         help="auto | ollama | vllm | claude | gemini | openai | mcp | "
+                                              "outline ... (`kx primers engines` lists all)"),
     model: Optional[str] = typer.Option(None, "--model", "-m"),
     api_base: Optional[str] = typer.Option(None, "--api-base"),
     num_ctx: Optional[int] = typer.Option(None, "--num-ctx", min=2048),
@@ -770,7 +796,8 @@ def convert(
 ) -> None:
     """Convert an existing deck, paper or repo into the TriFleet 8-page format."""
     primers_builder, _, primers_engines, _, _ = _primer_deps()
-    engine = _check_engine(engine, primers_engines)
+    engine = _check_engine(engine or config.get("primer_engine", "auto"), primers_engines)
+    model = model or (config.get("primer_model", "") or None)
     name = topic or Path(source).stem.replace("_", " ").replace("-", " ").strip() or source
     out_dir = out.parent if out else Path("./dist/convert")
     req = primers_builder.BuildRequest(

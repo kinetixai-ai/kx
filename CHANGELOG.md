@@ -1,6 +1,17 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- 22 engines, from one registry: self-hosted and open source (Ollama, vLLM,
+  llama.cpp, LM Studio, Jan, LocalAI, TGI, text-generation-webui, llamafile),
+  hosted (Claude, OpenAI, Gemini, Groq, OpenRouter, Together, DeepSeek,
+  Mistral, Fireworks, Cerebras, xAI), plus `mcp` and `outline`. Endpoints move
+  with `--api-base` or a `*_BASE_URL` variable.
+- `--engine` is now optional: kx prefers a local server that is running, then
+  a provider whose key is set, and reports what it chose. `kx primers engines`
+  lists them all with their status. `kx config set primer_engine/primer_model`
+  makes the choice stick.
+- `kx mcp install` covers Gemini CLI, Codex, VS Code and Zed as well as Claude
+  Code, Claude Desktop, Cursor, Goose, Cline, Continue, OpenHands and Open WebUI.
 - Primers are now generated page by page (`--mode iterative`, the default):
   each page gets its own LLM call carrying its archetype and a density quota,
   which is what lets a 7B local model fill eight dense pages instead of

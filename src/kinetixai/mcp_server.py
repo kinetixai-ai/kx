@@ -256,6 +256,10 @@ def run() -> None:
 CLIENTS = {
     "claude-code": "Claude Code (CLI)",
     "claude-desktop": "Claude Desktop",
+    "gemini-cli": "Gemini CLI",
+    "codex": "OpenAI Codex CLI",
+    "vscode": "VS Code (GitHub Copilot agent mode)",
+    "zed": "Zed",
     "goose": "Goose",
     "cline": "Cline (VS Code)",
     "continue": "Continue",
@@ -303,6 +307,28 @@ def config_snippet(client: str, cmd: str | None = None) -> dict:
         }.get(sys.platform, f"{home}/.config/Claude/claude_desktop_config.json")
         return {"client": client, "file": path, "format": "json", "snippet": std,
                 "note": "Merge into mcpServers, then restart Claude Desktop."}
+    if client == "gemini-cli":
+        return {"client": client, "file": f"{home}/.gemini/settings.json "
+                                          "(or .gemini/settings.json in a project)",
+                "format": "json", "snippet": std,
+                "note": "Merge into mcpServers. Gemini CLI loads it on the next run."}
+    if client == "codex":
+        snippet = ("[mcp_servers.kinetixai]\n"
+                   f"command = {_q(cmd)}\n"
+                   'args = ["mcp", "serve"]\n')
+        return {"client": client, "file": f"{home}/.codex/config.toml", "format": "toml",
+                "snippet": snippet, "note": "Codex CLI reads MCP servers from config.toml."}
+    if client == "vscode":
+        snippet = json.dumps({"servers": {"kinetixai": {"type": "stdio", "command": cmd,
+                                                        "args": ["mcp", "serve"]}}}, indent=2)
+        return {"client": client, "file": ".vscode/mcp.json (workspace) or user settings.json",
+                "format": "json", "snippet": snippet,
+                "note": "Then pick Agent mode in Copilot Chat and the kx tools appear."}
+    if client == "zed":
+        snippet = json.dumps({"context_servers": {"kinetixai": {
+            "command": {"path": cmd, "args": ["mcp", "serve"]}}}}, indent=2)
+        return {"client": client, "file": f"{home}/.config/zed/settings.json",
+                "format": "json", "snippet": snippet, "note": "Merge into context_servers."}
     if client == "cline":
         return {"client": client, "file": "cline_mcp_settings.json (Cline > MCP Servers > Configure)",
                 "format": "json", "snippet": std, "note": "Cline reloads the server list on save."}

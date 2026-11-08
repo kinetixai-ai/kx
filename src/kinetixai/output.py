@@ -244,3 +244,41 @@ def doctor(ch: dict) -> None:
         print_("[bold]Suggestions[/bold]")
         for line in ch["advice"]:
             print_(f"  - {escape(line)}")
+
+
+def engines_table(rows: list[dict]) -> None:
+    """`kx primers engines`: what can write a Primer, and what is ready now."""
+    from rich.table import Table
+
+    special = {"mcp", "outline"}
+    groups = [("Local / open source", "local"), ("Hosted APIs", "hosted"),
+              ("No key needed", "agent")]
+    for title, kind in groups:
+        if kind == "agent":
+            items = [r for r in rows if r["engine"] in special]
+        else:
+            items = [r for r in rows if r["kind"] == kind and r["engine"] not in special]
+        if not items:
+            continue
+        table = Table(title=title, title_justify="left", title_style="bold",
+                      box=None, pad_edge=False, show_edge=False)
+        table.add_column("", width=2)
+        table.add_column("engine", style="bold", no_wrap=True)
+        table.add_column("what it is")
+        table.add_column("needs", no_wrap=True)
+        for r in items:
+            if r["reachable"] is True:
+                mark, needs = "[green]*[/green]", "running"
+            elif r["reachable"] is False:
+                mark, needs = "[dim]-[/dim]", "not running"
+            elif r["kind"] == "local" and r["engine"] not in special:
+                mark, needs = "[dim]?[/dim]", "not probed"
+            elif r["keys"]:
+                ready = r["key_set"]
+                mark = "[green]*[/green]" if ready else "[dim]-[/dim]"
+                needs = r["keys"][0] + ("" if ready else " (unset)")
+            else:
+                mark, needs = "[green]*[/green]", "nothing"
+            table.add_row(mark, r["engine"], r["label"], needs)
+        console.print(table)
+        console.print()

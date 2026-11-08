@@ -398,8 +398,11 @@ def test_queries_pin_an_ambiguous_topic_to_its_field():
 
 def test_engine_aliases_resolve():
     from kinetixai.primers.engines import canonical
-    assert canonical("vllm") == "local-vllm"
     assert canonical("claude") == "anthropic"
+    assert canonical("local-vllm") == "vllm"       # the old name still works
+    assert canonical("lm-studio") == "lmstudio"
+    assert canonical("chatgpt") == "openai"
+    assert canonical("grok") == "xai"
     assert canonical("Ollama") == "ollama"
     assert canonical("none") == "outline"
 
@@ -619,3 +622,132 @@ def test_page_skeleton_lists_every_required_block():
     for kind in ("table", "code", "cloud", "chart"):
         assert kind in sk
     assert "Do not stop early" in sk
+
+
+# ── provider registry ─────────────────────────────────────────────────────
+
+from kinetixai.primers import providers as pv  # noqa: E402
+
+
+def test_registry_covers_local_and_hosted_engines():
+    for name in ("ollama", "vllm", "llamacpp", "lmstudio", "jan", "localai"):
+        assert pv.PROVIDERS[name].local, name
+    for name in ("anthropic", "openai", "gemini", "groq", "openrouter", "together"):
+        assert not pv.PROVIDERS[name].local, name
+    assert len(pv.NAMES) >= 20
+
+
+def test_every_provider_is_usable():
+    """A registry row with no endpoint and no protocol would fail at run time."""
+    for p in pv.PROVIDERS.values():
+        if p.protocol in ("mcp", "none"):
+            continue
+        assert p.base.startswith("http"), p.name
+        if not p.local:
+            assert p.keys, f"{p.name} is hosted but names no API key"
+            assert p.default_model, f"{p.name} needs a default model"
+
+
+def test_aliases_are_unique_and_resolve():
+    assert len(pv.ALIASES) == len({*pv.ALIASES})
+    for alias, target in pv.ALIASES.items():
+        assert target in pv.PROVIDERS
+        assert alias not in pv.PROVIDERS, f"{alias} is both a name and an alias"
+
+
+def test_base_url_prefers_override_then_env(monkeypatch):
+    p = pv.PROVIDERS["groq"]
+    assert pv.base_url(p, "http://custom/v1") == "http://custom/v1"
+    monkeypatch.setenv("GROQ_BASE_URL", "http://from-env/v1")
+    assert pv.base_url(p) == "http://from-env/v1"
+    monkeypatch.delenv("GROQ_BASE_URL")
+    assert pv.base_url(p) == p.base
+
+
+def test_hosted_engine_without_a_key_says_which_one(monkeypatch):
+    import kinetixai.primers.engines as e
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(EngineError, match="GROQ_API_KEY"):
+        e.complete("groq", None, "s", "u")
+
+
+def test_openai_compatible_providers_share_one_path(monkeypatch):
+    """Adding a backend should be a registry row, not a new code branch."""
+    import kinetixai.primers.engines as e
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json=None, headers=None):
+            seen["url"], seen["model"] = url, json["model"]
+            return FakeResponse()
+
+    monkeypatch.setattr(e.httpx, "Client", FakeClient)
+    monkeypatch.setenv("GROQ_API_KEY", "x")
+    e.complete("groq", None, "s", "u")
+    assert seen["url"] == "https://api.groq.com/openai/v1/chat/completions"
+    assert seen["model"] == pv.PROVIDERS["groq"].default_model
+    monkeypatch.setenv("TOGETHER_API_KEY", "x")
+    e.complete("together", "my-model", "s", "u")
+    assert seen["url"].startswith("https://api.together.xyz")
+    assert seen["model"] == "my-model"
+
+
+def test_pick_prefers_a_running_local_server(monkeypatch):
+    monkeypatch.setattr(pv, "reachable", lambda p, timeout=1.5: p.name == "lmstudio")
+    monkeypatch.setenv("OPENAI_API_KEY", "x")          # a key exists, but local wins
+    name, why = pv.pick()
+    assert name == "lmstudio" and "LM Studio" in why
+
+
+def test_pick_falls_back_to_a_configured_key(monkeypatch):
+    monkeypatch.setattr(pv, "reachable", lambda p, timeout=1.5: False)
+    for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "x")
+    name, why = pv.pick()
+    assert name == "groq" and "GROQ_API_KEY" in why
+
+
+def test_pick_explains_itself_when_nothing_is_available(monkeypatch):
+    monkeypatch.setattr(pv, "reachable", lambda p, timeout=1.5: False)
+    for p in pv.PROVIDERS.values():
+        for env in p.keys:
+            monkeypatch.delenv(env, raising=False)
+    name, why = pv.pick()
+    assert name == "outline"
+    assert "kx primers engines" in why          # tells the user where to look
+
+
+def test_pick_honours_an_explicit_choice():
+    assert pv.pick("claude")[0] == "anthropic"
+    assert pv.pick("lm-studio")[0] == "lmstudio"
+
+
+def test_auto_engine_is_resolved_and_reported(tmp_path: Path, monkeypatch):
+    import kinetixai.primers.builder as b
+    monkeypatch.setattr(b, "_research", lambda topic, limit, warnings, relevance=0.18: [])
+    monkeypatch.setattr(b.providers, "pick", lambda prefer=None, check_local=True:
+                        ("outline", "nothing available"))
+    logged: list[str] = []
+    req = BuildRequest(topic="T", pages=1, pdfs=0, jsons=0, engine="auto",
+                       out_dir=tmp_path / "d")
+    res = b.build(req, log=logged.append)
+    assert any("engine: outline" in line for line in logged)
+    assert req.engine == "outline"
+
+
+def test_status_rows_cover_every_engine():
+    rows = pv.status(check_local=False)
+    assert {r["engine"] for r in rows} == set(pv.NAMES)
+    for r in rows:
+        assert r["kind"] in ("local", "hosted", "agent")

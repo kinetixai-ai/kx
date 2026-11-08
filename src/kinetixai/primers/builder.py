@@ -23,7 +23,7 @@ from typing import Callable
 from .. import net
 from ..resolve import resolve
 from ..sources import aggregate
-from . import blueprint, engines, ingest, prompts, renderer, schema, search
+from . import blueprint, engines, ingest, prompts, providers, renderer, schema, search
 from .exporters import images as images_x, jsonx, pptx as pptx_x
 
 MODES = ("iterative", "single")
@@ -42,7 +42,7 @@ class BuildRequest:
     jsons: int = 0
     watermark: str = "Narmadya Innovations"
     author: str = "Rohit Patel"
-    engine: str = "outline"
+    engine: str = "auto"
     model: str | None = None
     api_base: str | None = None
     num_ctx: int | None = None
@@ -247,6 +247,12 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
     # 2. synthesize
     personas = [p.strip().lower() for p in req.personas if p.strip()]
     req.personas = personas
+    if req.engine in ("auto", "", None):
+        chosen, why = providers.pick()
+        if chosen == "outline":
+            warnings.append(why)
+        log(f"engine: {chosen} ({why})")
+        req.engine = chosen
     if req.engine == "outline":
         log("building offline outline (no-LLM mode)…")
         primer = engines.outline(req.topic, req.pages, personas, material.text,
