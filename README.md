@@ -13,12 +13,15 @@ open-source agents can use all of it. macOS, Linux and Windows, Python 3.10+.
 | Windows (PowerShell) | `irm https://kinetixai.ai/install.ps1 \| iex` |
 | Any OS, pipx | `pipx install "kinetixai[rag,mcp] @ https://kinetixai.ai/cli/dl/kinetixai-0.2.0-py3-none-any.whl"` |
 | From source (repo access) | `pipx install "git+https://github.com/rpaut03l/kinetixai-labs.git#subdirectory=cli"` |
-| PyPI (once published) | `pipx install "kinetixai[rag,mcp]"` |
-| No Python | standalone `kx` binaries are attached to each GitHub release |
+| PyPI (coming soon, not published yet) | `pipx install "kinetixai[rag,mcp]"` |
+| No Python | standalone `kx` binaries: coming with the first release |
 
 The installers never use sudo/Administrator, check for Python 3.10+, verify the
-SHA-256 of the wheel they download, and use pipx if present (otherwise a venv in
-`~/.kinetixai`). Options: `KX_EXTRAS` (default `rag,mcp`), `KX_SOURCE=site|pypi|git`,
+SHA-256 of the wheel they download, keep it in `~/.kinetixai/wheels` (so
+`pipx reinstall` / `pipx upgrade` keep working), and use pipx if present
+(otherwise a venv in `~/.kinetixai`). They never install from PyPI unless you set
+`KX_SOURCE=pypi`: kx is not published there yet, and an unclaimed name must not
+be installed by accident. Options: `KX_EXTRAS` (default `rag,mcp`), `KX_SOURCE=site|pypi|git`,
 `KX_WHEEL=<local wheel>`, `KX_NO_PIPX=1`, and on Windows `KX_NO_MODIFY_PATH=1`.
 
 Extras: `rag` (pypdf, to read PDFs), `mcp` (the agent server), `keyring` (token
@@ -62,8 +65,9 @@ kx ask "What is RLVR?"
 kx logout                            # revokes the token and forgets it
 ```
 
-Every command takes `--json` (ASCII-safe JSON on stdout, errors on stderr, exit
-code 1 on failure, 2 on bad usage).
+Every command takes `--json`, placed after the command (`kx search "rope" --json`,
+not `kx --json search`): ASCII-safe JSON on stdout, errors on stderr, exit code 1
+on failure, 2 on bad usage.
 
 ## Local RAG and privacy
 

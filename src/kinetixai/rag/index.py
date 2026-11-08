@@ -58,19 +58,32 @@ def load_index() -> dict | None:
         return None
 
 
-def _scan(paths: list[str]) -> list[Path]:
+def _hidden(path: Path, root: Path) -> bool:
+    """Dotfiles and anything inside a dot-directory (.git, .venv, .obsidian ...)."""
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        parts = path.parts
+    return any(part.startswith(".") for part in parts)
+
+
+def _scan(paths: list[str], warnings: list[str]) -> list[Path]:
     files: list[Path] = []
+    wanted = TEXT_SUFFIXES | {".pdf"}
     for raw in paths:
         p = Path(raw).expanduser()
         if p.is_dir():
-            files += sorted(f for f in p.rglob("*") if f.is_file() and f.suffix.lower() in TEXT_SUFFIXES | {".pdf"})
+            files += sorted(f for f in p.rglob("*")
+                            if f.is_file() and f.suffix.lower() in wanted and not _hidden(f, p))
         elif p.is_file():
             files.append(p)
+        else:
+            warnings.append(f"{p} no longer exists; skipped (forget it with: kx rag index --forget \"{p}\")")
     return files
 
 
 def build(extra_paths: list[str] | None = None, embeddings: bool | None = None,
-          progress=None) -> dict:
+          progress=None, forget: list[str] | None = None, forget_all: bool = False) -> dict:
     """(Re)build the index from the library (+ any remembered or new paths).
 
     embeddings: True = require Ollama, False = BM25 only, None = use Ollama if it is up.
@@ -78,8 +91,20 @@ def build(extra_paths: list[str] | None = None, embeddings: bool | None = None,
     """
     cfg = config.load()
     old = load_index() or {}
-    paths = list(dict.fromkeys((old.get("paths") or []) + [str(Path(p).expanduser().resolve()) for p in extra_paths or []]))
     warnings: list[str] = []
+    remembered = [] if forget_all else list(old.get("paths") or [])
+    for f in forget or []:
+        target = str(Path(f).expanduser().resolve())
+        if target in remembered:
+            remembered.remove(target)
+        elif f in remembered:
+            remembered.remove(f)
+        else:
+            warnings.append(f"{f} was not a remembered path.")
+    for p in extra_paths or []:
+        if not Path(p).expanduser().exists():
+            raise RagError(f"{p} does not exist.")
+    paths = list(dict.fromkeys(remembered + [str(Path(p).expanduser().resolve()) for p in extra_paths or []]))
     docs: list[dict] = []
     chunks: list[dict] = []
 
@@ -103,7 +128,7 @@ def build(extra_paths: list[str] | None = None, embeddings: bool | None = None,
                 warnings.append(f"skipped PDF for {e['key']} ({exc.__class__.__name__})")
         add_doc({"key": e["key"], "title": e.get("title") or e["key"], "path": pdf, "kind": "library"}, pages)
 
-    for f in _scan(paths):
+    for f in _scan(paths, warnings):
         try:
             pages = file_pages(f)
         except MissingExtra as exc:

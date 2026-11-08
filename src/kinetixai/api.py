@@ -1,6 +1,7 @@
 """Client for the KinetixAI API (ask, whoami, token self-revoke)."""
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import urlparse
 
 import httpx
@@ -12,9 +13,22 @@ class ApiError(Exception):
         self.status = status
 
 
+def is_loopback_host(host: str | None) -> bool:
+    """Exactly 'localhost' or a loopback IP (127.0.0.0/8, ::1). Not '127.evil.com'."""
+    host = (host or "").lower().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _loopback(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1"} or host.startswith("127.")
+    try:
+        return is_loopback_host(urlparse(url).hostname)
+    except ValueError:
+        return False
 
 
 class KinetixApi:
@@ -22,7 +36,11 @@ class KinetixApi:
         self.endpoint = endpoint.rstrip("/")
         self.client = client
         self.token = token
-        if token and urlparse(self.endpoint).scheme != "https" and not _loopback(self.endpoint):
+        try:
+            scheme = urlparse(self.endpoint).scheme
+        except ValueError:
+            raise ApiError(f"{self.endpoint!r} is not a valid endpoint.")
+        if token and scheme != "https" and not _loopback(self.endpoint):
             raise ApiError(
                 f"refusing to send your API token over plain http to {self.endpoint}. "
                 "Use an https endpoint (or localhost for development)."
@@ -36,6 +54,8 @@ class KinetixApi:
             r = self.client.request(method, f"{self.endpoint}{path}", headers=self._headers(), **kwargs)
         except httpx.TimeoutException:
             raise ApiError(f"{self.endpoint} timed out. Try again in a moment.")
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol, ValueError):
+            raise ApiError(f"{self.endpoint!r} is not a valid endpoint. Fix it with `kx config set endpoint https://kinetixai.ai`.")
         except httpx.HTTPError as exc:
             raise ApiError(f"could not reach {self.endpoint} ({exc.__class__.__name__}).")
         if r.status_code == 404:

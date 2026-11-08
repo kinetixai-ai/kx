@@ -6,13 +6,16 @@ from urllib.parse import urlparse
 import httpx
 
 from .. import net
+from ..api import is_loopback_host
 
 SOURCE = "Ollama"
 
 
 def is_local(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1"} or host.startswith("127.")
+    try:
+        return is_loopback_host(urlparse(url).hostname)
+    except ValueError:
+        return False
 
 
 def models(url: str, client: httpx.Client | None = None) -> list[str] | None:

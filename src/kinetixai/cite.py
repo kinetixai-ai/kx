@@ -35,11 +35,16 @@ def bibtex_key(p: dict) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", _ascii(last)).lower() + str(p.get("year") or "") + first
 
 
+_BIB_ESC = {"\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "&": "\\&", "%": "\\%", "#": "\\#",
+            "$": "\\$", "_": "\\_", "^": "\\^{}", "~": "\\~{}"}
+
+
 def _bib_escape(s: str) -> str:
-    return (s or "").replace("\\", "\\textbackslash{}").replace("&", "\\&").replace("%", "\\%").replace("#", "\\#")
+    """Escape LaTeX specials, braces included, so a field can never unbalance the entry."""
+    return "".join(_BIB_ESC.get(ch, ch) for ch in (s or ""))
 
 
-def bibtex(p: dict) -> str:
+def bibtex(p: dict, key: str | None = None) -> str:
     aid = re.sub(r"v\d+$", "", p.get("arxiv_id") or "") or None
     venue = p.get("venue")
     is_arxiv_only = aid and (not venue or venue.lower() == "arxiv")
@@ -60,7 +65,28 @@ def bibtex(p: dict) -> str:
     if url:
         fields.append(("url", url))
     body = ",\n".join(f"  {k} = {{{v}}}" for k, v in fields)
-    return f"@{kind}{{{bibtex_key(p)},\n{body}\n}}"
+    return f"@{kind}{{{key or bibtex_key(p)},\n{body}\n}}"
+
+
+def bibtex_many(items: list[dict]) -> str:
+    """Several entries with unique keys: dao2022flash, dao2022flasha, dao2022flashb..."""
+    seen: dict[str, int] = {}
+    keys = [bibtex_key(i) for i in items]
+    dupes = {k for k in keys if keys.count(k) > 1}
+    out = []
+    for item, k in zip(items, keys):
+        if k in dupes:
+            n = seen.get(k, 0)
+            seen[k] = n + 1
+            suffix = ""
+            while True:  # a, b, ... z, aa, ab ...
+                suffix = chr(97 + n % 26) + suffix
+                n = n // 26 - 1
+                if n < 0:
+                    break
+            k = k + suffix
+        out.append(bibtex(item, k))
+    return "\n\n".join(out)
 
 
 def _apa_author(name: str) -> str:

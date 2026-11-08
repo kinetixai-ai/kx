@@ -6,6 +6,7 @@ is printed to stdout except the protocol itself.
 """
 from __future__ import annotations
 
+import functools
 import inspect
 import json
 import shutil
@@ -48,6 +49,18 @@ def _clip(n: int, lo: int = 1, hi: int = 50) -> int:
     return max(lo, min(int(n), hi))
 
 
+def _safe(fn):
+    """Tool results, never tracebacks: a source being down is an answer an
+    agent can act on, and a traceback on stderr is noise in the client's log."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - every failure becomes a structured result
+            return {"ok": False, "error": str(exc) or exc.__class__.__name__, "warnings": [str(exc)]}
+    return wrapper
+
+
 def build_server():
     Server = _server_class()
     kwargs = {"instructions": INSTRUCTIONS}
@@ -56,44 +69,48 @@ def build_server():
     server = Server("kinetixai", **kwargs)
 
     @server.tool()
+    @_safe
     def search_papers(query: str, limit: int = 10) -> dict:
         """Search research papers across arXiv, Semantic Scholar and OpenAlex (merged, de-duplicated, ranked by citations)."""
         return services.search_papers(query, _clip(limit))
 
     @server.tool()
+    @_safe
     def get_paper(id: str) -> dict:
         """Full metadata and abstract for one paper, by arXiv id, arXiv/HF URL, or DOI."""
         p = services.get_paper(id)
-        return {"paper": p, "found": p is not None}
+        return {"paper": p, "found": p is not None, "warnings": []}
 
     @server.tool()
+    @_safe
     def find_code(paper: str, limit: int = 10) -> dict:
         """Code implementations of a paper (arXiv id preferred): the authors' official repo plus GitHub repos by stars."""
         return services.find_code(paper, _clip(limit))
 
     @server.tool()
+    @_safe
     def find_models(query: str, limit: int = 10, sort: str = "downloads") -> dict:
         """Hugging Face models for a search query, or that cite a paper when given an arXiv id. Sort: downloads, likes, trending, updated."""
         return services.find_models(query, _clip(limit), sort=sort)
 
     @server.tool()
+    @_safe
     def find_datasets(query: str, limit: int = 10, sort: str = "downloads") -> dict:
         """Hugging Face datasets for a search query, or that cite a paper when given an arXiv id."""
         return services.find_datasets(query, _clip(limit), sort=sort)
 
     @server.tool()
+    @_safe
     def library_search(query: str, limit: int = 10) -> dict:
         """Search the user's local KinetixAI paper library by keyword (title, authors, abstract, tags)."""
         return services.library_search(query, _clip(limit))
 
     @server.tool()
+    @_safe
     def rag_ask(question: str, k: int = 5, use_llm: bool = True) -> dict:
         """Answer a question from the user's local library with cited passages. Runs on this machine
         (BM25, plus a local Ollama model when available). Run `kx rag index` first."""
-        try:
-            return services.rag_ask(question, k=_clip(k, 1, 20), llm=use_llm)
-        except Exception as exc:  # an empty index is a normal answer for an agent
-            return {"question": question, "answer": None, "passages": [], "error": str(exc)}
+        return services.rag_ask(question, k=_clip(k, 1, 20), llm=use_llm)
 
     return server
 
@@ -131,6 +148,12 @@ def _q(s: str) -> str:
     return json.dumps(s)
 
 
+def _shell_cmd(cmd: str) -> str:
+    """The kx path as a shell word: double-quoted when it has spaces
+    (C:\\Program Files\\...), which bash, zsh, PowerShell and cmd all accept."""
+    return f'"{cmd}"' if any(c.isspace() for c in cmd) else cmd
+
+
 def config_snippet(client: str, cmd: str | None = None) -> dict:
     cmd = cmd or command_path()
     std = json.dumps({"mcpServers": {"kinetixai": {"command": cmd, "args": ["mcp"]}}}, indent=2)
@@ -159,9 +182,10 @@ def config_snippet(client: str, cmd: str | None = None) -> dict:
             "    enabled: true\n"
             "    timeout: 300\n"
         )
-        return {"client": client, "file": f"{home}/.config/goose/config.yaml", "format": "yaml",
-                "snippet": snippet,
-                "note": f"Or for one session: goose session --with-extension {_q(cmd + ' mcp')}"}
+        goose_file = (r"%APPDATA%\Block\goose\config\config.yaml" if sys.platform == "win32"
+                      else f"{home}/.config/goose/config.yaml")
+        return {"client": client, "file": goose_file, "format": "yaml", "snippet": snippet,
+                "note": "Or for one session: goose session --with-extension '" + _shell_cmd(cmd) + " mcp'"}
     if client == "continue":
         snippet = (
             "mcpServers:\n"
@@ -179,7 +203,7 @@ def config_snippet(client: str, cmd: str | None = None) -> dict:
         return {"client": client, "file": "config.toml (OpenHands)", "format": "toml", "snippet": snippet,
                 "note": "In the OpenHands UI: Settings > MCP > add a stdio server with the same command."}
     if client == "open-webui":
-        snippet = f"uvx mcpo --port 8000 -- {cmd} mcp"
+        snippet = f"uvx mcpo --port 8000 -- {_shell_cmd(cmd)} mcp"
         return {"client": client, "file": "terminal", "format": "shell", "snippet": snippet,
                 "note": "mcpo exposes the tools as an OpenAPI server. In Open WebUI: Settings > Tools > "
                         "add http://localhost:8000."}

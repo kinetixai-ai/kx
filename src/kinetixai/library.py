@@ -6,9 +6,11 @@ added, and an optional path to a PDF on disk (used by `kx rag index`).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,16 +29,36 @@ def pdf_dir() -> Path:
 
 
 def _slug(text: str) -> str:
+    """ASCII slug for readability only; may be empty (e.g. a CJK-only title)."""
     s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
-    return s[:60] or "untitled"
+    return s[:40].strip("-")
 
 
-def key_for(p: Paper) -> str:
+def file_digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 16), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _meta_digest(p: Paper) -> str:
+    norm = lambda t: " ".join(unicodedata.normalize("NFKC", t or "").casefold().split())
+    raw = "\x1f".join([norm(p.title), "|".join(norm(a) for a in p.authors or []), str(p.year or "")])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def key_for(p: Paper, file: Path | None = None) -> str:
+    """arxiv:<id> or doi:<doi> when known. Otherwise local:<slug>-<hash>, where
+    the hash is of the file's bytes (so two different PDFs never share a key,
+    whatever their titles) or, with no file, of title + authors + year."""
     if p.arxiv_id:
         return "arxiv:" + re.sub(r"v\d+$", "", p.arxiv_id.strip())
     if p.doi:
         return "doi:" + p.doi.strip().lower()
-    return "local:" + _slug(p.title)
+    digest = file_digest(file) if file is not None and Path(file).is_file() else _meta_digest(p)
+    slug = _slug(p.title)
+    return "local:" + (f"{slug}-" if slug else "") + digest[:12]
 
 
 def load() -> list[dict]:
@@ -64,7 +86,7 @@ class LibraryError(Exception):
 def add(paper: Paper, tags: list[str] | None = None, pdf_path: Path | None = None) -> tuple[dict, bool]:
     """Add or update a paper. Returns (entry, created)."""
     items = load()
-    key = key_for(paper)
+    key = key_for(paper, pdf_path)
     entry = next((i for i in items if i["key"] == key), None)
     created = entry is None
     fresh = paper.to_dict()
@@ -150,8 +172,10 @@ def from_local_pdf(path: Path, copy: bool = False) -> tuple[Paper, Path]:
     dest = path
     if copy:
         pdf_dir().mkdir(parents=True, exist_ok=True)
-        dest = pdf_dir() / path.name
-        if dest.resolve() != path:
+        # The content hash in the name means two different files called
+        # paper.pdf never overwrite each other's copy.
+        dest = pdf_dir() / f"{path.stem}-{file_digest(path)[:10]}{path.suffix}"
+        if dest.resolve() != path and not dest.exists():
             shutil.copy2(path, dest)
     return Paper(title=title, authors=authors, source="local file"), dest
 
@@ -172,7 +196,12 @@ def read_import_file(path: Path) -> list[tuple[Paper, dict]]:
     base = Path(path).expanduser().resolve().parent
     for d in data:
         if isinstance(d, dict) and (d.get("title") or d.get("arxiv_id") or d.get("doi")):
-            extras = {"tags": [str(t) for t in d.get("tags") or []], "pdf_path": None}
+            raw_tags = d.get("tags") or []
+            if isinstance(raw_tags, str):
+                raw_tags = [t.strip() for t in raw_tags.split(",")]
+            elif not isinstance(raw_tags, list):
+                raw_tags = [raw_tags]
+            extras = {"tags": [str(t) for t in raw_tags if str(t).strip()], "pdf_path": None}
             if d.get("pdf_path"):
                 pdf = Path(str(d["pdf_path"])).expanduser()
                 extras["pdf_path"] = pdf if pdf.is_absolute() else base / pdf

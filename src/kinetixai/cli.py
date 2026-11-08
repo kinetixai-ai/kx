@@ -22,18 +22,19 @@ from .rag.text import MissingExtra
 from .resolve import arxiv_id, doi, resolve
 from .sources import aggregate, orcid
 
+TYPER_SAFE = {"pretty_exceptions_enable": False, "pretty_exceptions_show_locals": False}
 app = typer.Typer(
+    **TYPER_SAFE,
     add_completion=True,
     no_args_is_help=True,
-    rich_markup_mode=None,
     help=(
         "KinetixAI command line: papers -> code -> models -> datasets -> your own private Q&A.\n\n"
         "Every command takes --json for scripting. Docs: https://kinetixai.ai/cli/"
     ),
 )
-config_app = typer.Typer(no_args_is_help=True, help="View or change settings.")
-library_app = typer.Typer(no_args_is_help=True, help="Your local paper library (stored on this machine).")
-rag_app = typer.Typer(no_args_is_help=True, help="Private question answering over your library, on this machine.")
+config_app = typer.Typer(**TYPER_SAFE, no_args_is_help=True, help="View or change settings.")
+library_app = typer.Typer(**TYPER_SAFE, no_args_is_help=True, help="Your local paper library (stored on this machine).")
+rag_app = typer.Typer(**TYPER_SAFE, no_args_is_help=True, help="Private question answering over your library, on this machine.")
 app.add_typer(config_app, name="config")
 app.add_typer(library_app, name="library")
 app.add_typer(rag_app, name="rag")
@@ -98,13 +99,16 @@ def doctor(
 
 @app.command()
 def search(
-    query: str = typer.Argument(..., help="What to search for."),
-    limit: int = typer.Option(None, "--limit", "-n", help="Max results per source."),
+    query: str = typer.Argument(..., metavar="QUERY", help="What to search for."),
+    limit: int = typer.Option(None, "--limit", "-n", min=1, max=100, help="Max results per source."),
     source: str = typer.Option("all", "--source", "-s", help="all | arxiv | semantic | openalex"),
     json_out: bool = JSON,
     open_: bool = typer.Option(False, "--open", help="Open the top result in a browser."),
 ) -> None:
     """Search papers across arXiv, Semantic Scholar and OpenAlex."""
+    if source != "all" and source not in aggregate.SOURCES:
+        output.error(f"--source must be one of: all, {', '.join(aggregate.SOURCES)}")
+        raise typer.Exit(code=2)
     limit = limit or config.get("limit", 10)
     sources = None if source == "all" else [source]
     with _client() as client:
@@ -112,14 +116,16 @@ def search(
     for w in warnings:
         output.warn(w)
     output.papers(papers, json_out)
+    if not papers and warnings:
+        raise typer.Exit(code=1)  # every source failed: not the same as "no results"
     if open_ and papers and papers[0].url:
         webbrowser.open(papers[0].url)
 
 
 @app.command()
 def scholar(
-    query: str = typer.Argument(..., help="Researcher name or ORCID iD."),
-    limit: int = typer.Option(10, "--limit", "-n"),
+    query: str = typer.Argument(..., metavar="QUERY", help="Researcher name or ORCID iD."),
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=100),
     json_out: bool = JSON,
 ) -> None:
     """Look up a researcher (name or ORCID iD) and their recent work."""
@@ -141,7 +147,7 @@ def scholar(
 @app.command()
 @handled
 def get(
-    ident: str = typer.Argument(..., help="arXiv id, DOI, or arXiv URL."),
+    ident: str = typer.Argument(..., metavar="IDENT", help="arXiv id, DOI, or arXiv URL."),
     pdf: bool = typer.Option(False, "--pdf", help="Also download the PDF if available."),
     out: Path = typer.Option(Path("."), "--out", "-o", help="Directory for the PDF."),
     bibtex: bool = typer.Option(False, "--bibtex", help="Print a BibTeX entry instead."),
@@ -177,7 +183,7 @@ def get(
 @app.command()
 @handled
 def cite(
-    ref: str = typer.Argument(..., help="arXiv id, DOI, or a key / number from `kx library list`."),
+    ref: str = typer.Argument(..., metavar="REF", help="arXiv id, DOI, or a key / number from `kx library list`."),
     fmt: str = typer.Option("bibtex", "--format", "-f", help="bibtex | apa"),
     json_out: bool = JSON,
 ) -> None:
@@ -210,8 +216,8 @@ def _warn_all(data: dict) -> None:
 @app.command()
 @handled
 def code(
-    paper: str = typer.Argument(..., help="arXiv id or URL (best), or free text."),
-    limit: int = typer.Option(10, "--limit", "-n"),
+    paper: str = typer.Argument(..., metavar="PAPER", help="arXiv id or URL (best), or free text."),
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=100),
     json_out: bool = JSON,
 ) -> None:
     """Find code for a paper: the authors' repo (via Hugging Face) and GitHub implementations by stars."""
@@ -230,8 +236,8 @@ def code(
 @app.command()
 @handled
 def models(
-    query: str = typer.Argument(..., help="Search text, or an arXiv id for models that cite the paper."),
-    limit: int = typer.Option(10, "--limit", "-n"),
+    query: str = typer.Argument(..., metavar="QUERY", help="Search text, or an arXiv id for models that cite the paper."),
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=100),
     sort: str = typer.Option("downloads", "--sort", help="downloads | likes | trending | updated"),
     task: Optional[str] = typer.Option(None, "--task", help="Pipeline tag, e.g. text-generation."),
     json_out: bool = JSON,
@@ -250,8 +256,8 @@ def models(
 @app.command()
 @handled
 def datasets(
-    query: str = typer.Argument(..., help="Search text, or an arXiv id for datasets that cite the paper."),
-    limit: int = typer.Option(10, "--limit", "-n"),
+    query: str = typer.Argument(..., metavar="QUERY", help="Search text, or an arXiv id for datasets that cite the paper."),
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=100),
     sort: str = typer.Option("downloads", "--sort", help="downloads | likes | trending | updated"),
     json_out: bool = JSON,
 ) -> None:
@@ -269,7 +275,13 @@ def datasets(
 # ── Account ───────────────────────────────────────────────────────────────
 
 def _endpoint(override: str | None = None) -> str:
-    return (override or config.get("endpoint")).rstrip("/")
+    if override:
+        try:
+            return config.validate("endpoint", override)
+        except ValueError as exc:
+            output.error(str(exc))
+            raise typer.Exit(code=2)
+    return config.get("endpoint").rstrip("/")
 
 
 @app.command()
@@ -363,13 +375,14 @@ def whoami(
         raise typer.Exit(code=1)
     output.console.print(f"[bold]{user.get('email')}[/bold]" + (f"  ({user['name']})" if user.get("name") else ""))
     access = user.get("access") or {}
-    output.console.print(f"[dim]Plan:[/dim] {access.get('label') or user.get('plan')}   [dim]Endpoint:[/dim] {ep}")
+    plan = access.get("label") or (user.get("plan") or "free").title()
+    output.console.print(f"[dim]Plan:[/dim] {plan}   [dim]Endpoint:[/dim] {ep}")
 
 
 @app.command()
 @handled
 def ask(
-    question: str = typer.Argument(..., help="Your question for KinetixAI."),
+    question: str = typer.Argument(..., metavar="QUESTION", help="Your question for KinetixAI."),
     json_out: bool = JSON,
 ) -> None:
     """Ask KinetixAI and get a grounded, cited answer (uses your account when logged in)."""
@@ -385,7 +398,7 @@ def ask(
 @library_app.command("add")
 @handled
 def library_add(
-    refs: List[str] = typer.Argument(None, help="arXiv ids, DOIs, or paths to local PDFs / notes."),
+    refs: List[str] = typer.Argument(None, metavar="REFS", help="arXiv ids, DOIs, or paths to local PDFs / notes."),
     from_file: Optional[Path] = typer.Option(None, "--from-file", help="Import papers from a JSON file (offline)."),
     pdf: bool = typer.Option(False, "--pdf", help="Download the open PDF too (used by kx rag index)."),
     copy: bool = typer.Option(False, "--copy", help="Copy local files into the library folder."),
@@ -458,7 +471,11 @@ def library_list(
 
 @library_app.command("search")
 @handled
-def library_search(query: str, limit: int = typer.Option(10, "--limit", "-n"), json_out: bool = JSON) -> None:
+def library_search(
+    query: str = typer.Argument(..., metavar="QUERY", help="Words to look for."),
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=100),
+    json_out: bool = JSON,
+) -> None:
     """Keyword search over your library (offline)."""
     hits = library.search(query, limit)
     if json_out:
@@ -493,9 +510,10 @@ def library_export(
     items = library.load()
     if fmt == "json":
         text = json.dumps({"version": library.VERSION, "papers": items}, indent=2, ensure_ascii=False)
-    elif fmt in cite_mod.FORMATS:
-        sep = "\n\n" if fmt == "bibtex" else "\n"
-        text = sep.join(cite_mod.format_citation(i, fmt) for i in items)
+    elif fmt == "bibtex":
+        text = cite_mod.bibtex_many(items)  # unique keys even for same-author, same-year papers
+    elif fmt == "apa":
+        text = "\n".join(cite_mod.apa(i) for i in items)
     else:
         output.error("--format must be bibtex, apa or json.")
         raise typer.Exit(code=2)
@@ -516,6 +534,8 @@ def library_export(
 @handled
 def rag_index_cmd(
     path: List[Path] = typer.Option(None, "--path", "-p", help="Extra folder or file of PDFs/notes (remembered)."),
+    forget: List[Path] = typer.Option(None, "--forget", help="Stop indexing a remembered path."),
+    forget_all: bool = typer.Option(False, "--forget-all-paths", help="Stop indexing every remembered path."),
     embeddings: Optional[bool] = typer.Option(None, "--embeddings/--no-embeddings",
                                               help="Require / skip Ollama embeddings (default: use if running)."),
     json_out: bool = JSON,
@@ -524,7 +544,8 @@ def rag_index_cmd(
     def progress(done, total):
         if not json_out:
             output.err.print(f"[dim]embedded {done}/{total} chunks[/dim]")
-    summary = rag_index.build([str(p) for p in path or []], embeddings=embeddings, progress=progress)
+    summary = rag_index.build([str(p) for p in path or []], embeddings=embeddings, progress=progress,
+                              forget=[str(p) for p in forget or []], forget_all=forget_all)
     for w in summary["warnings"]:
         output.warn(w)
     if json_out:
@@ -539,8 +560,8 @@ def rag_index_cmd(
 @rag_app.command("ask")
 @handled
 def rag_ask(
-    question: str = typer.Argument(...),
-    k: int = typer.Option(5, "-k", help="Passages to retrieve."),
+    question: str = typer.Argument(..., metavar="QUESTION", help="Your question."),
+    k: int = typer.Option(5, "-k", min=1, max=50, help="Passages to retrieve."),
     no_llm: bool = typer.Option(False, "--no-llm", help="Return passages only, even if Ollama is running."),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Ollama model (default: config ollama_model)."),
     json_out: bool = JSON,
@@ -627,34 +648,32 @@ def config_show(json_out: bool = JSON) -> None:
 
 
 @config_app.command("get")
-def config_get(key: str, json_out: bool = JSON) -> None:
+def config_get(key: str = typer.Argument(..., metavar="KEY"), json_out: bool = JSON) -> None:
     """Print one setting."""
-    val = config.get(key, "")
+    cfg = config.load()
+    if key not in cfg:
+        output.error(f"unknown setting {key!r}. Settings: {', '.join(sorted(config.KEYS))}")
+        raise typer.Exit(code=1)
     if json_out:
-        output.emit_json({key: val})
+        output.emit_json({key: cfg[key]})
     else:
-        output.console.print(str(val))
+        output.console.print(str(cfg[key]))
 
 
 @config_app.command("set")
-def config_set(key: str, value: str, json_out: bool = JSON) -> None:
+def config_set(key: str = typer.Argument(..., metavar="KEY"), value: str = typer.Argument(..., metavar="VALUE"),
+               json_out: bool = JSON) -> None:
     """Change one setting: endpoint, limit, ollama_url, ollama_model, embed_model, token_store (auto|file)."""
-    val: object = value
-    if key in config.INT_KEYS:
-        if not value.isdigit():
-            output.error(f"{key} must be a whole number.")
-            raise typer.Exit(code=2)
-        val = int(value)
-    if key in ("endpoint", "ollama_url"):
-        if not re.match(r"^https?://[^\s/]+", value):
-            output.error(f"{key} must be an http(s) URL.")
-            raise typer.Exit(code=2)
-        val = value.rstrip("/")
+    try:
+        val = config.validate(key, value)
+    except ValueError as exc:
+        output.error(str(exc))
+        raise typer.Exit(code=2)
     path = config.set_value(key, val)
     if json_out:
         output.emit_json({key: val, "path": str(path)})
     else:
-        output.console.print(f"[green]set[/green] {key} = {val}  [dim]{path}[/dim]")
+        output.console.print(f"[green]set[/green] {key} = {val}  [dim]{path}[/dim]", soft_wrap=True)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────

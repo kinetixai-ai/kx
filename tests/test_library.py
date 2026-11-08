@@ -64,7 +64,7 @@ def test_add_local_pdf_reads_title(tmp_path):
     res = runner.invoke(cli.app, ["library", "add", str(pdf), "--tag", "mine", "--json"])
     assert res.exit_code == 0, res.output
     entry = json.loads(res.stdout)["added"][0]
-    assert entry["key"] == "local:my-notes" and entry["pdf_path"] == str(pdf.resolve())
+    assert entry["key"].startswith("local:my-notes-") and entry["pdf_path"] == str(pdf.resolve())
     assert entry["tags"] == ["mine"]
 
 

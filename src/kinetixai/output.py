@@ -232,7 +232,7 @@ def doctor(ch: dict) -> None:
                      if idx else "not built"))
     for name, e in ch["extras"].items():
         label = f"\\[{name}] extra"
-        print_(f"  {label:<13}{mark(e['installed'])}  [dim]{e['for']}[/dim]")
+        print_(f"  {label:<17} {mark(e['installed'])}  [dim]{e['for']}[/dim]")
     ol = ch["ollama"]
     print_(f"  Ollama      {mark(ol['running'])}  [dim]{escape(ol['url'])}[/dim]"
                   + (f"  models: {escape(', '.join(ol['models'][:6]))}" if ol["models"] else ""))

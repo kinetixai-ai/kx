@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from platformdirs import user_config_dir, user_data_dir
 
@@ -28,6 +30,50 @@ DEFAULTS: dict = {
     "embed_model": "nomic-embed-text",
 }
 INT_KEYS = {"limit"}
+URL_KEYS = {"endpoint", "ollama_url"}
+TOKEN_STORES = {"auto", "file"}
+KEYS = set(DEFAULTS) | {"token_store"}
+_warned: set[str] = set()
+
+
+def _warn(msg: str) -> None:
+    """One warning per message per process, on stderr (never stdout: MCP uses it)."""
+    if msg not in _warned:
+        _warned.add(msg)
+        print(f"warning: {msg}", file=sys.stderr)
+
+
+def valid_url(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname
+        parts.port  # raises ValueError on a bad port
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(host) and not any(c.isspace() for c in value)
+
+
+def validate(key: str, value):
+    """Check a value for `kx config set` (and a stored value on load). Returns
+    the cleaned value or raises ValueError with a message for the user."""
+    if key not in KEYS:
+        raise ValueError(f"unknown setting {key!r}. Settings: {', '.join(sorted(KEYS))}")
+    if key in INT_KEYS:
+        if isinstance(value, bool) or not str(value).isdigit() or not 1 <= int(value) <= 100:
+            raise ValueError(f"{key} must be a whole number from 1 to 100.")
+        return int(value)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be text.")
+    value = value.strip()
+    if key in URL_KEYS:
+        if not valid_url(value):
+            raise ValueError(f"{key} must be an http(s) URL like https://kinetixai.ai, not {value!r}.")
+        return value.rstrip("/")
+    if key == "token_store" and value not in TOKEN_STORES:
+        raise ValueError("token_store must be auto or file.")
+    return value
 
 
 def config_dir() -> Path:
@@ -44,19 +90,44 @@ def config_path() -> Path:
     return config_dir() / "config.json"
 
 
-def load() -> dict:
-    cfg = dict(DEFAULTS)
+def _stored() -> dict:
     path = config_path()
     try:
-        if path.is_file():
-            cfg.update(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError):
-        pass  # a broken config falls back to defaults
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        _warn(f"{path} is not valid JSON; using defaults.")
+        return {}
+    if not isinstance(data, dict):
+        _warn(f"{path} should hold a JSON object; using defaults.")
+        return {}
+    return data
+
+
+def load() -> dict:
+    cfg = dict(DEFAULTS)
+    for key, value in _stored().items():
+        if key not in KEYS:
+            continue  # unknown keys are kept in the file but ignored
+        try:
+            cfg[key] = validate(key, value)
+        except ValueError as exc:
+            _warn(f"ignoring {key} in {config_path()}: {exc} Using {DEFAULTS.get(key, 'the default')!r}.")
     # environment wins, so CI and scripts can override without writing a file
-    if os.environ.get("KINETIXAI_ENDPOINT"):
-        cfg["endpoint"] = os.environ["KINETIXAI_ENDPOINT"]
-    if os.environ.get("OLLAMA_HOST"):
-        cfg["ollama_url"] = normalise_ollama(os.environ["OLLAMA_HOST"])
+    env = os.environ.get("KINETIXAI_ENDPOINT")
+    if env:
+        if valid_url(env):
+            cfg["endpoint"] = env.rstrip("/")
+        else:
+            _warn(f"ignoring KINETIXAI_ENDPOINT={env!r}: not an http(s) URL.")
+    host = os.environ.get("OLLAMA_HOST")
+    if host:
+        url = normalise_ollama(host)
+        if valid_url(url):
+            cfg["ollama_url"] = url
+        else:
+            _warn(f"ignoring OLLAMA_HOST={host!r}: not a host or URL.")
     return cfg
 
 
@@ -85,13 +156,7 @@ def get(key: str, default=None):
 
 
 def set_value(key: str, value) -> Path:
-    path = config_path()
-    stored: dict = {}
-    try:
-        if path.is_file():
-            stored = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        stored = {}
+    stored = _stored()
     stored[key] = value
     return save(stored)
 
