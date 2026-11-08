@@ -11,9 +11,9 @@ open-source agents can use all of it. macOS, Linux and Windows, Python 3.10+.
 |---|---|
 | macOS / Linux | `curl -fsSL https://kinetixai.ai/install.sh \| sh` |
 | Windows (PowerShell) | `irm https://kinetixai.ai/install.ps1 \| iex` |
-| Any OS, pipx | `pipx install "kinetixai[rag,mcp] @ https://kinetixai.ai/cli/dl/kinetixai-0.2.0-py3-none-any.whl"` |
+| Any OS, PyPI | `pipx install "kinetixai[rag,mcp]"` |
+| Any OS, from kinetixai.ai | `pipx install "kinetixai[rag,mcp] @ https://kinetixai.ai/cli/dl/kinetixai-0.2.0-py3-none-any.whl"` |
 | From source (repo access) | `pipx install "git+https://github.com/rpaut03l/kinetixai-labs.git#subdirectory=cli"` |
-| PyPI (coming soon, not published yet) | `pipx install "kinetixai[rag,mcp]"` |
 | No Python | standalone `kx` binaries: coming with the first release |
 
 The installers never use sudo/Administrator, check for Python 3.10+, verify the
