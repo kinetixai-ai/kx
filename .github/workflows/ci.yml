@@ -77,13 +77,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p public
-          if curl -fsSL https://kinetixai.ai/install.sh -o public/install.sh \
-             && curl -fsSL https://kinetixai.ai/install.ps1 -o public/install.ps1; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::Installers are not live on kinetixai.ai yet; skipping the installer test."
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          fi
+          # Live site first, then the preview of the next site release.
+          for base in https://kinetixai.ai https://feat-launch-readiness.kinetixai.pages.dev; do
+            if curl -fsSL "$base/install.sh" -o public/install.sh \
+               && curl -fsSL "$base/install.ps1" -o public/install.ps1; then
+              echo "Testing the installers from $base"
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::notice::Installers are not published yet; skipping the installer test."
+          echo "ok=false" >> "$GITHUB_OUTPUT"
       - name: install.sh with pipx, then without
         if: steps.fetch.outputs.ok == 'true' && runner.os != 'Windows'
         shell: bash
