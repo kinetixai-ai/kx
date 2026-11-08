@@ -127,8 +127,9 @@ def preflight(req: "BuildRequest") -> None:
     uses = ", ".join(sorted({w for _, w in missing}))
     raise MissingDependency(
         f"{uses} needs {names}, which is not installed.\n"
-        "  pip install 'kinetixai[primers]'\n"
-        "  (pipx: pipx install --force -e '<path to kx>[primers]')")
+        "  pip  : pip install 'kinetixai[primers]'\n"
+        "  pipx : pipx inject kinetixai jinja2 pyyaml python-pptx pypdf "
+        "pypdfium2 pillow weasyprint")
 
 
 class MissingDependency(RuntimeError):
