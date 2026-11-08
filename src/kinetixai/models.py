@@ -17,6 +17,7 @@ class Paper:
     pdf_url: str | None = None
     citations: int | None = None
     source: str = ""
+    abstract: str | None = None
 
     def key(self) -> str:
         """De-duplication key: prefer DOI, else a normalized title."""
@@ -41,6 +42,64 @@ class Paper:
             "pdf_url": self.pdf_url,
             "citations": self.citations,
             "source": self.source,
+            "abstract": self.abstract,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Paper":
+        names = {f for f in cls.__dataclass_fields__}
+        data = {k: v for k, v in d.items() if k in names}
+        data.setdefault("title", "")
+        authors = data.get("authors") or []
+        if isinstance(authors, str):
+            authors = [a.strip() for a in re.split(r",| and ", authors) if a.strip()]
+        data["authors"] = list(authors)
+        return cls(**data)
+
+
+@dataclass
+class Repo:
+    """A code repository that implements a paper."""
+    name: str
+    url: str
+    stars: int | None = None
+    description: str | None = None
+    language: str | None = None
+    license: str | None = None
+    updated: str | None = None
+    source: str = ""
+    official: bool = False  # linked by the authors on the paper's HF page
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name, "url": self.url, "stars": self.stars, "official": self.official,
+            "description": self.description, "language": self.language,
+            "license": self.license, "updated": self.updated, "source": self.source,
+        }
+
+
+@dataclass
+class HubItem:
+    """A Hugging Face model or dataset."""
+    id: str
+    kind: str  # "model" | "dataset"
+    downloads: int | None = None
+    likes: int | None = None
+    license: str | None = None
+    task: str | None = None
+    library: str | None = None
+    updated: str | None = None
+
+    @property
+    def url(self) -> str:
+        base = "https://huggingface.co/"
+        return base + ("datasets/" if self.kind == "dataset" else "") + self.id
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "kind": self.kind, "url": self.url,
+            "downloads": self.downloads, "likes": self.likes, "license": self.license,
+            "task": self.task, "library": self.library, "updated": self.updated,
         }
 
 

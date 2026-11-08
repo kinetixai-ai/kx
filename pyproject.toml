@@ -4,13 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kinetixai"
-version = "0.1.0"
-description = "KinetixAI command line: search papers across arXiv, Semantic Scholar and OpenAlex, look up researchers, and ask KinetixAI from your terminal."
+version = "0.2.0"
+description = "kx: papers to code, models and datasets, a local paper library, private RAG over your PDFs, and an MCP server for open-source agents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Rohit S Patel" }]
-keywords = ["kinetixai", "research", "arxiv", "semantic-scholar", "openalex", "cli"]
+keywords = ["kinetixai", "research", "arxiv", "semantic-scholar", "openalex", "huggingface", "rag", "mcp", "ollama", "cli"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "typer>=0.12,<1",
   "httpx>=0.27,<1",
@@ -19,14 +34,26 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://kinetixai.ai"
+Homepage = "https://kinetixai.ai/cli/"
 Documentation = "https://kinetixai.ai/cli/"
+Source = "https://github.com/rpaut03l/kinetixai-labs/tree/main/cli"
 
 [project.scripts]
-kx = "kinetixai.cli:app"
+kx = "kinetixai.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+# PDF text for `kx rag index` and titles for local PDFs.
+rag = ["pypdf>=4"]
+# `kx mcp` server for agents. Works with the 1.x and 2.x SDKs.
+mcp = ["mcp>=1.2,<3"]
+# Store the API token in the OS keychain instead of a 0600 file.
+keyring = ["keyring>=24"]
+all = ["pypdf>=4", "mcp>=1.2,<3", "keyring>=24"]
+dev = ["pytest>=8", "pypdf>=4", "mcp>=1.2,<3"]
+build = ["pyinstaller>=6.6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

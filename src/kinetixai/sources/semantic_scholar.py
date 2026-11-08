@@ -6,7 +6,7 @@ import httpx
 from ..models import Paper
 
 API = "https://api.semanticscholar.org/graph/v1/paper/search"
-FIELDS = "title,year,authors,venue,externalIds,url,citationCount,openAccessPdf"
+FIELDS = "title,year,authors,venue,externalIds,url,citationCount,openAccessPdf,abstract"
 
 
 def search(query: str, limit: int, client: httpx.Client) -> list[Paper]:
@@ -30,4 +30,5 @@ def _paper(p: dict) -> Paper:
         pdf_url=oa.get("url") or None,
         citations=p.get("citationCount"),
         source="Semantic Scholar",
+        abstract=p.get("abstract") or None,
     )

@@ -7,7 +7,7 @@ import httpx
 
 from ..models import Paper
 
-API = "http://export.arxiv.org/api/query"
+API = "https://export.arxiv.org/api/query"
 ATOM = "{http://www.w3.org/2005/Atom}"
 
 
@@ -37,6 +37,7 @@ def _parse(xml_text: str) -> list[Paper]:
         for link in entry.findall(f"{ATOM}link"):
             if link.get("title") == "pdf" or link.get("type") == "application/pdf":
                 pdf_url = link.get("href")
+        summary = " ".join((entry.findtext(f"{ATOM}summary") or "").split()) or None
         papers.append(
             Paper(
                 title=title,
@@ -47,6 +48,7 @@ def _parse(xml_text: str) -> list[Paper]:
                 arxiv_id=arxiv_id,
                 pdf_url=pdf_url,
                 source="arXiv",
+                abstract=summary,
             )
         )
     return papers

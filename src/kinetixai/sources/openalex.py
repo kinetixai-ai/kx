@@ -33,4 +33,16 @@ def _paper(w: dict) -> Paper:
         pdf_url=(loc.get("pdf_url") or None),
         citations=w.get("cited_by_count"),
         source="OpenAlex",
+        abstract=_abstract(w.get("abstract_inverted_index")),
     )
+
+
+def _abstract(inv: dict | None) -> str | None:
+    """OpenAlex ships abstracts as {word: [positions]}; put the words back in order."""
+    if not inv:
+        return None
+    slots: dict[int, str] = {}
+    for word, positions in inv.items():
+        for pos in positions or []:
+            slots[int(pos)] = word
+    return " ".join(slots[i] for i in sorted(slots)) or None
