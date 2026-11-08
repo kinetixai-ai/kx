@@ -20,7 +20,7 @@ def test_every_client_has_a_snippet(client):
     assert "mcp" in snip["snippet"] and snip["file"]
     if snip["format"] == "json":
         cfg = json.loads(snip["snippet"])
-        assert cfg["mcpServers"]["kinetixai"]["args"] == ["mcp"]
+        assert cfg["mcpServers"]["kinetixai"]["args"] == ["mcp", "serve"]
 
 
 def test_windows_paths_are_escaped_in_every_format():
@@ -29,7 +29,7 @@ def test_windows_paths_are_escaped_in_every_format():
         s = mcp_server.config_snippet(client, cmd)["snippet"]
         if s.lstrip().startswith("{"):
             assert json.loads(s)["mcpServers"]["kinetixai"]["command"] == cmd
-        elif client != "open-webui":
+        elif client not in ("open-webui", "claude-code"):
             assert json.dumps(cmd) in s  # double-quoted, backslashes escaped (YAML/TOML-safe)
 
 

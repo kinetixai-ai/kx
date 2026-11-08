@@ -1,12 +1,17 @@
 """`kx primers build` / `kx convert` pipeline.
 
-research (kx federated search) → ingest (--source) → synthesize (LLM or
-offline outline) → validate word budget (repair-prompt once, then
-deterministic compaction) → render HTML → export PDF / PNG / PPTX / JSON.
+research → ingest → synthesize → density gate → budget → render → export.
 
-Citations only ever come from fetched metadata (aggregate.search /
-resolve) — the model is given those and told it may cite nothing else;
---verify-citations re-resolves each one and drops any that do not check out.
+Synthesis runs page by page by default (``mode="iterative"``): each page
+gets its own LLM call carrying only that page's archetype and density
+quota, and a page that comes back sparse is sent through an expansion
+pass before it is allowed near the renderer. That is what lets a 7B
+local model fill eight dense pages; single-call mode remains available
+for large models (``mode="single"``).
+
+Citations only ever come from fetched metadata, filtered for domain
+relevance (``search.filter_sources``) so an ambiguous word like "fusion"
+cannot drag in another discipline's papers.
 """
 from __future__ import annotations
 
@@ -16,10 +21,12 @@ from pathlib import Path
 from typing import Callable
 
 from .. import net
-from ..sources import aggregate
 from ..resolve import resolve
-from . import engines, ingest, prompts, renderer, schema
+from ..sources import aggregate
+from . import blueprint, engines, ingest, prompts, renderer, schema, search
 from .exporters import images as images_x, jsonx, pptx as pptx_x
+
+MODES = ("iterative", "single")
 
 
 @dataclass
@@ -33,12 +40,16 @@ class BuildRequest:
     ppts: int = 0
     images: int = 0
     jsons: int = 0
-    watermark: str = "Rohit Patel | Narmadya Innovations"
+    watermark: str = "Narmadya Innovations"
     author: str = "Rohit Patel"
     engine: str = "outline"
     model: str | None = None
+    api_base: str | None = None
+    mode: str = "iterative"
+    min_sections: int = schema.SECTIONS_MIN
     verify_citations: bool = False
-    research_limit: int = 8
+    relevance: float = 0.18
+    research_limit: int = 12
     out_dir: Path = Path("./dist/primers")
     style: str = "trifleet-8page"
 
@@ -72,17 +83,37 @@ def slugify(text: str) -> str:
     return s[:60] or "primer"
 
 
-def _research(topic: str, limit: int, warnings: list[str]) -> list[dict]:
-    """Federated search for citable sources. Failure is non-fatal: the primer
-    simply carries fewer (or zero) citations."""
+# ── research ──────────────────────────────────────────────────────────────
+
+def _research(topic: str, limit: int, warnings: list[str],
+              relevance: float = 0.18) -> list[dict]:
+    """Federated search, then domain filtering. Never fatal: a build with no
+    citations is honest, a build with wrong ones is not."""
+    found: list[dict] = []
     try:
         with net.client() as client:
-            papers, warns = aggregate.search(topic, limit, client, None)
-        warnings.extend(warns)
-        return [p.to_dict() for p in papers]
+            for query in search.queries_for(topic):
+                papers, warns = aggregate.search(query, limit, client, None)
+                warnings.extend(w for w in warns if w not in warnings)
+                found.extend(p.to_dict() for p in papers)
     except Exception as exc:  # research must never kill the build
         warnings.append(f"research skipped ({exc.__class__.__name__}: {exc})")
         return []
+
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for p in found:
+        key = (p.get("doi") or p.get("arxiv_id") or p.get("title", "")).lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(p)
+
+    kept, notes = search.filter_sources(unique, topic, min_coverage=relevance)
+    warnings.extend(notes)
+    if unique and not kept:
+        warnings.append("no source passed domain filtering; the primer will carry no "
+                        "citations (lower --relevance to keep weaker matches)")
+    return kept
 
 
 def _verify(citations: list[dict], warnings: list[str]) -> list[dict]:
@@ -92,7 +123,7 @@ def _verify(citations: list[dict], warnings: list[str]) -> list[dict]:
         for c in citations:
             ident = c.get("arxiv_id") or c.get("doi")
             if not ident:
-                kept.append(c)  # title-only source from search metadata: keep as-is
+                kept.append(c)  # title-only source from search metadata
                 continue
             try:
                 p = resolve(ident, client)
@@ -105,50 +136,126 @@ def _verify(citations: list[dict], warnings: list[str]) -> list[dict]:
     return kept
 
 
+# ── synthesis ─────────────────────────────────────────────────────────────
+
+def _synthesize_iterative(req: BuildRequest, sources: list[dict], source_text: str,
+                          warnings: list[str], log: Callable[[str], None]) -> schema.Primer:
+    specs = blueprint.plan(req.pages)
+    total = len(specs)
+    primer = schema.Primer(title=req.topic, topic=req.topic, watermark=req.watermark,
+                           author=req.author, personas=req.personas)
+    titles: list[str] = []
+    for i, spec in enumerate(specs, 1):
+        log(f"page {i}/{total} ({spec.role})…")
+        user = prompts.build_page_prompt(req.topic, spec, i, total, req.personas,
+                                         source_text, sources, titles)
+        try:
+            page = engines.synthesize_page(req.engine, req.model, prompts.PAGE_SYSTEM_PROMPT,
+                                           user, api_base=req.api_base)
+        except engines.EngineError as exc:
+            warnings.append(f"page {i} ({spec.role}) failed: {exc}")
+            continue
+
+        d = schema.density(page, req.min_sections, spec.must_have)
+        if not d.ok or d.sections < req.min_sections:
+            log(f"page {i} is sparse ({'; '.join(d.reasons())}); expanding…")
+            page = _expand(req, page, d, spec, i, total, warnings)
+
+        d = schema.density(page, req.min_sections, spec.must_have)
+        if not d.ok or d.sections < req.min_sections:
+            warnings.append(f"page {i} '{page.title}' still below the density standard: "
+                            + "; ".join(d.reasons()))
+        page.must_have = list(spec.must_have)   # remembered for the fitting pass
+        primer.pages.append(page)
+        titles.append(page.title)
+
+    if not primer.pages:
+        raise engines.EngineError(
+            "every page failed to generate. Check the engine and model, or use "
+            "--engine outline for a draft without an LLM.")
+    return primer
+
+
+def _expand(req: BuildRequest, page: schema.Page, d: schema.Density,
+            spec: blueprint.PageSpec, index: int, total: int,
+            warnings: list[str]) -> schema.Page:
+    """One completion pass over a sparse page. Keeps the better of the two."""
+    payload = {"title": page.title, "subtitle": page.subtitle,
+               "takeaway": page.takeaway, "blocks": page.blocks}
+    user = prompts.expand_prompt(payload, d.reasons(), spec, req.topic, index, total)
+    try:
+        grown = engines.synthesize_page(req.engine, req.model, prompts.PAGE_SYSTEM_PROMPT,
+                                        user, api_base=req.api_base)
+    except engines.EngineError as exc:
+        warnings.append(f"page {index} expansion failed: {exc}")
+        return page
+    # The expansion is only an improvement if it actually added substance.
+    if len(grown.blocks) >= len(page.blocks) and grown.word_count() >= page.word_count():
+        return grown
+    warnings.append(f"page {index} expansion returned less than the original; kept the original")
+    return page
+
+
+def _synthesize_single(req: BuildRequest, sources: list[dict], source_text: str,
+                       warnings: list[str], log: Callable[[str], None]) -> schema.Primer:
+    log(f"synthesizing {req.pages} pages in one call with {req.engine}…")
+    system = prompts.SYSTEM_PROMPT
+    user = prompts.build_user_prompt(req.topic, req.pages, req.personas,
+                                     source_text, sources)
+    primer = engines.synthesize(req.engine, req.model, system, user, api_base=req.api_base)
+    problems = schema.validate_budget(primer)
+    if problems:
+        log("page budget violated; asking the model to repair…")
+        try:
+            primer = engines.synthesize(req.engine, req.model, system,
+                                        user + "\n\n" + prompts.repair_prompt(problems),
+                                        api_base=req.api_base)
+        except engines.EngineError as exc:
+            warnings.append(f"repair pass failed ({exc}); compacting deterministically.")
+    sparse = schema.validate_density(primer, req.min_sections)
+    if sparse:
+        warnings.append("single-call mode produced sparse pages; --mode iterative "
+                        "generates one page per call and fills them")
+        warnings.extend(sparse)
+    return primer
+
+
+# ── pipeline ──────────────────────────────────────────────────────────────
+
 def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> BuildResult:
     warnings: list[str] = []
     out_dir = Path(req.out_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
+    if req.mode not in MODES:
+        raise ValueError(f"mode must be one of: {', '.join(MODES)}")
 
     # 1. ingest + research
     log("ingesting source material…")
     material = ingest.load(req.source, req.topic)
     warnings.extend(material.warnings)
     log("searching verified sources (arXiv + Semantic Scholar + OpenAlex)…")
-    sources = material.papers + _research(req.topic, req.research_limit, warnings)
-    seen: set[str] = set()
-    sources = [s for s in sources
-               if (k := (s.get("doi") or s.get("arxiv_id") or s.get("title", "")).lower())
-               and k not in seen and not seen.add(k)]
+    sources = material.papers + _research(req.topic, req.research_limit, warnings,
+                                          req.relevance)
 
     # 2. synthesize
     personas = [p.strip().lower() for p in req.personas if p.strip()]
+    req.personas = personas
     if req.engine == "outline":
         log("building offline outline (no-LLM mode)…")
         primer = engines.outline(req.topic, req.pages, personas, material.text,
                                  sources, req.watermark)
+    elif req.mode == "iterative":
+        primer = _synthesize_iterative(req, sources, material.text, warnings, log)
     else:
-        log(f"synthesizing {req.pages} pages with {req.engine}…")
-        system = prompts.SYSTEM_PROMPT
-        user = prompts.build_user_prompt(req.topic, req.pages, personas,
-                                         material.text, sources)
-        primer = engines.synthesize(req.engine, req.model, system, user)
-        problems = schema.validate_budget(primer)
-        if problems:
-            log("page budget violated; asking the model to repair…")
-            try:
-                primer = engines.synthesize(
-                    req.engine, req.model, system,
-                    user + "\n\n" + prompts.repair_prompt(problems))
-            except engines.EngineError as exc:
-                warnings.append(f"repair pass failed ({exc}); compacting deterministically.")
+        primer = _synthesize_single(req, sources, material.text, warnings, log)
+
     primer.topic = primer.topic or req.topic
     primer.category = req.category
     primer.personas = personas
     primer.watermark = req.watermark
     primer.author = req.author
     if len(primer.pages) != req.pages:
-        warnings.append(f"model produced {len(primer.pages)} pages (asked for {req.pages}).")
+        warnings.append(f"produced {len(primer.pages)} pages (asked for {req.pages}).")
 
     # 3. citations
     primer.citations = sources[:15]
@@ -156,10 +263,19 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
         log("verifying citations…")
         primer.citations = _verify(primer.citations, warnings)
 
-    # 4. budget enforcement (deterministic, never ships an overflowing page)
+    # 4. deterministic clean-up: never ship an overflowing page or stale numbering
+    schema.renumber_sections(primer)
     touched = schema.compact(primer)
     if touched:
         warnings.append(f"compacted {touched} over-budget page(s) by ~15%.")
+    # The page box clips what does not fit, so fit it here rather than
+    # letting a chart the model wrote disappear off the bottom unannounced.
+    for i, page in enumerate(primer.pages, 1):
+        over = schema.overflow_mm(page)
+        if over > 0:
+            log(f"page {i} runs {over:.0f}mm past the printable area; fitting…")
+            for note in schema.fit_page(page, getattr(page, "must_have", None)):
+                warnings.append(f"page {i}: {note}")
     for problem in schema.validate_budget(primer):
         warnings.append(f"budget: {problem}")
 

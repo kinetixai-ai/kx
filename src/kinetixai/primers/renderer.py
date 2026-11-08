@@ -27,16 +27,53 @@ def render_html(primer, editable: bool = True, template: str = DEFAULT_TEMPLATE)
     env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)),
                       autoescape=select_autoescape(["html", "j2"]))
     data = primer.to_dict() if hasattr(primer, "to_dict") else primer
-    # attribute access in the template
-    class NS(dict):
-        __getattr__ = dict.get
-    def ns(obj):
-        if isinstance(obj, dict):
-            return NS({k: ns(v) for k, v in obj.items()})
-        if isinstance(obj, list):
-            return [ns(v) for v in obj]
-        return obj
-    return env.get_template(template).render(primer=ns(data), editable=editable)
+    return env.get_template(template).render(primer=_ns(data), editable=editable)
+
+
+class _Namespace:
+    """Attribute access for template data.
+
+    Deliberately NOT a dict subclass: Jinja resolves ``b.items`` by trying
+    ``getattr`` first, so a dict would hand back its own ``.items`` method
+    instead of the block's ``items`` field. Any key colliding with a dict
+    method (items, keys, values, get, pop, copy, update) would break the
+    same way, silently.
+    """
+    __slots__ = ("_data",)
+
+    def __init__(self, data: dict):
+        object.__setattr__(self, "_data", data)
+
+    def __getattr__(self, key: str):
+        if key.startswith("__"):
+            raise AttributeError(key)
+        return self._data.get(key)
+
+    def __getitem__(self, key):
+        return self._data.get(key)
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __bool__(self):
+        return bool(self._data)
+
+    def __repr__(self):
+        return f"Namespace({self._data!r})"
+
+
+def _ns(obj):
+    if isinstance(obj, dict):
+        return _Namespace({k: _ns(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_ns(v) for v in obj]
+    return obj
 
 
 def html_to_pdf(html: str, out_pdf: Path) -> Path:

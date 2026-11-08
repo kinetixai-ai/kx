@@ -1,6 +1,32 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- Primers are now generated page by page (`--mode iterative`, the default):
+  each page gets its own LLM call carrying its archetype and a density quota,
+  which is what lets a 7B local model fill eight dense pages instead of
+  emitting one paragraph per page. `--mode single` keeps the old one-call
+  behaviour for large models.
+- Pages follow the TriFleetRCA arc: overview, data, two deep dives,
+  guardrails, implementation, evaluation, takeaways. Any `--pages N` maps
+  onto it. A page that comes back sparse goes through an expansion pass
+  before rendering; `--min-sections-per-page` sets the floor.
+- New blocks: inline SVG bar charts, hierarchy stacks, numbered step lists,
+  and the pink scalloped comic cloud. Pastel bento cards throughout.
+- A printable-height model fits each page before rendering. The page box
+  clips what does not fit, so content that used to vanish off the bottom is
+  now trimmed or dropped deliberately, and every drop is reported.
+- Citations are filtered for domain relevance: searching "GPU & CUDA: Kernel
+  Fusion" no longer returns tokamak fusion or image-fusion papers. Every
+  dropped source is explained; `--relevance 0` disables it.
+- Default watermark is "Narmadya Innovations", rendered tilted at the top
+  and bottom left. Page badges count the references page, so an 8-page
+  primer reads 1/9 through 9/9 rather than 1/8 then 5/5.
+- Engine aliases (`vllm`, `claude`) and `--api-base`. New `--engine mcp`
+  delegates generation to the host agent via MCP sampling, so no API key is
+  needed on the user's machine.
+- `kx mcp serve` and `kx mcp install <client>`; the server exposes
+  build_primer, convert_document and search_verified_papers alongside the
+  research tools. `kx mcp` with no subcommand still runs the server.
 - New: `kx primers build` — automated "Story to Silicon" Primer generation.
   Topic or source (.pptx / .pdf / .md, GitHub repo URL, arXiv id/DOI) in;
   styled A4 PDF, 300 DPI PNG page cards, editable .pptx with speaker notes,

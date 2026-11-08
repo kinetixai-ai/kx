@@ -621,6 +621,15 @@ def _primer_errors():
             ImageExportError, PptxExportError)
 
 
+def _check_engine(engine: str, primers_engines) -> str:
+    """Accept any alias (vllm, claude, ...) and return the canonical name."""
+    name = primers_engines.canonical(engine)
+    if name not in primers_engines.ENGINES:
+        output.error(f"--engine must be one of: {', '.join(primers_engines.ALL_ENGINE_NAMES)}")
+        raise typer.Exit(code=2)
+    return name
+
+
 def _run_build(req, json_out: bool):
     from .primers import builder as primers_builder
     log = (lambda s: None) if json_out else (lambda s: output.err.print(f"[dim]{s}[/dim]"))
@@ -659,12 +668,20 @@ def primers_build(
     images: int = typer.Option(0, "--images", min=0, help="300 DPI PNG page cards to export."),
     json_n: int = typer.Option(0, "--json-bundles", min=0,
                                help="Paper Lab JSON bundles (tabs + bibtex + rag_chunks)."),
-    watermark: str = typer.Option("Rohit Patel | Narmadya Innovations", "--watermark",
+    watermark: str = typer.Option("Narmadya Innovations", "--watermark",
                                   help="Running header/footer watermark."),
     author: str = typer.Option("Rohit Patel", "--author"),
     engine: str = typer.Option("outline", "--engine",
-                               help="outline (no LLM) | local-vllm | ollama | openai | anthropic | gemini"),
+                               help="outline (no LLM) | ollama | vllm | claude | gemini | openai | mcp"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Model name for the chosen engine."),
+    api_base: Optional[str] = typer.Option(None, "--api-base",
+                                           help="Override the engine's endpoint, e.g. http://localhost:8000/v1"),
+    mode: str = typer.Option("iterative", "--mode",
+                             help="iterative-per-page (dense, one call per page) | single (one call, large models)"),
+    min_sections: int = typer.Option(5, "--min-sections-per-page", min=1, max=9,
+                                     help="Density floor: numbered sections required per page."),
+    relevance: float = typer.Option(0.18, "--relevance", min=0.0, max=1.0,
+                                    help="Citation domain-match threshold; 0 disables filtering."),
     verify_citations: bool = typer.Option(False, "--verify-citations",
                                           help="Re-resolve every citation; drop any that fail."),
     out_dir: Path = typer.Option(Path("./dist/primers"), "--out-dir", "-o"),
@@ -672,14 +689,17 @@ def primers_build(
 ) -> None:
     """Research, synthesize and compile a 'Story to Silicon' Primer bundle."""
     primers_builder, _, primers_engines, _, _ = _primer_deps()
-    if engine not in primers_engines.ENGINES:
-        output.error(f"--engine must be one of: {', '.join(primers_engines.ENGINES)}")
+    engine = _check_engine(engine, primers_engines)
+    mode_v = "iterative" if mode.startswith("iterative") else mode
+    if mode_v not in primers_builder.MODES:
+        output.error(f"--mode must be one of: {', '.join(primers_builder.MODES)}")
         raise typer.Exit(code=2)
     req = primers_builder.BuildRequest(
         topic=topic, source=source, category=category,
         personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark, author=author, engine=engine, model=model,
+        api_base=api_base, mode=mode_v, min_sections=min_sections, relevance=relevance,
         verify_citations=verify_citations, out_dir=out_dir)
     _run_build(req, json_out)
 
@@ -724,26 +744,27 @@ def convert(
     ppts: int = typer.Option(0, "--ppts", min=0),
     images: int = typer.Option(0, "--images", min=0),
     json_n: int = typer.Option(0, "--json-bundles", min=0),
-    watermark: str = typer.Option("Rohit Patel", "--watermark"),
+    watermark: str = typer.Option("Narmadya Innovations", "--watermark"),
     author: str = typer.Option("Rohit Patel", "--author"),
     engine: str = typer.Option("outline", "--engine",
-                               help="outline (no LLM) | local-vllm | ollama | openai | anthropic | gemini"),
+                               help="outline (no LLM) | ollama | vllm | claude | gemini | openai | mcp"),
     model: Optional[str] = typer.Option(None, "--model", "-m"),
+    api_base: Optional[str] = typer.Option(None, "--api-base"),
+    mode: str = typer.Option("iterative", "--mode"),
     out: Optional[Path] = typer.Option(None, "--out", "-o",
                                        help="Output PDF path (its folder receives the other artifacts)."),
     json_out: bool = JSON,
 ) -> None:
     """Convert an existing deck, paper or repo into the TriFleet 8-page format."""
     primers_builder, _, primers_engines, _, _ = _primer_deps()
-    if engine not in primers_engines.ENGINES:
-        output.error(f"--engine must be one of: {', '.join(primers_engines.ENGINES)}")
-        raise typer.Exit(code=2)
+    engine = _check_engine(engine, primers_engines)
     name = topic or Path(source).stem.replace("_", " ").replace("-", " ").strip() or source
     out_dir = out.parent if out else Path("./dist/convert")
     req = primers_builder.BuildRequest(
         topic=name, source=source, personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark, author=author, engine=engine, model=model,
+        api_base=api_base, mode="iterative" if mode.startswith("iterative") else mode,
         out_dir=out_dir, style=style)
     from .primers import builder as pb
     if out:  # honor the exact --out filename
@@ -760,42 +781,88 @@ def convert(
 
 # ── MCP ───────────────────────────────────────────────────────────────────
 
-@app.command()
-def mcp(
-    config_for: Optional[str] = typer.Option(
-        None, "--config", help="Print a config snippet for: claude-desktop, goose, cline, continue, openhands, open-webui, cursor."),
-    info: bool = typer.Option(False, "--info", help="List the tools and whether the mcp package is installed."),
-    json_out: bool = JSON,
-) -> None:
-    """Run an MCP server on stdio so agents (Goose, Cline, Continue, OpenHands, ...) can use kx."""
+mcp_app = typer.Typer(**TYPER_SAFE, invoke_without_command=True,
+                      help="Run kx as an MCP server so agents (Claude Code, Cursor, Goose, ...) can use it.")
+app.add_typer(mcp_app, name="mcp")
+
+
+def _serve() -> None:
     from . import mcp_server
-    if config_for:
-        try:
-            snip = mcp_server.config_snippet(config_for)
-        except ValueError as exc:
-            output.error(str(exc))
-            raise typer.Exit(code=2)
-        if json_out:
-            output.emit_json(snip)
-        else:
-            output.err.print(f"# {mcp_server.CLIENTS[config_for]}: {snip['file']}")
-            print(snip["snippet"].rstrip())
-            if snip.get("note"):
-                output.err.print(f"# {snip['note']}")
-        return
-    if info or json_out:
-        data = mcp_server.info()
-        if json_out:
-            output.emit_json(data)
-        else:
-            output.console.print(f"Tools: {', '.join(data['tools'])}")
-            output.console.print(f"mcp package installed: {data['mcp_installed']}")
-        return
     try:
         mcp_server.run()
     except mcp_server.MissingMcp as exc:
         output.error(str(exc))
         raise typer.Exit(code=1)
+
+
+def _print_snippet(client: str, json_out: bool) -> None:
+    from . import mcp_server
+    try:
+        snip = mcp_server.config_snippet(client)
+    except ValueError as exc:
+        output.error(str(exc))
+        raise typer.Exit(code=2)
+    if json_out:
+        output.emit_json(snip)
+        return
+    output.err.print(f"# {mcp_server.CLIENTS[client]}: {snip['file']}")
+    print(snip["snippet"].rstrip())
+    if snip.get("note"):
+        output.err.print(f"# {snip['note']}")
+
+
+def _print_info(json_out: bool) -> None:
+    from . import mcp_server
+    data = mcp_server.info()
+    if json_out:
+        output.emit_json(data)
+    else:
+        output.console.print(f"Tools: {', '.join(data['tools'])}")
+        output.console.print(f"mcp package installed: {data['mcp_installed']}")
+
+
+@mcp_app.callback()
+def mcp_main(
+    ctx: typer.Context,
+    config_for: Optional[str] = typer.Option(
+        None, "--config", help="Print a config snippet for: claude-code, claude-desktop, goose, "
+                               "cline, continue, openhands, open-webui, cursor."),
+    info: bool = typer.Option(False, "--info", help="List the tools and whether the mcp package is installed."),
+    json_out: bool = JSON,
+) -> None:
+    """Run the server on stdio. `kx mcp` with no subcommand still works."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if config_for:
+        _print_snippet(config_for, json_out)
+        return
+    if info or json_out:
+        _print_info(json_out)
+        return
+    _serve()
+
+
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """Run the MCP server on stdio (what an agent client launches)."""
+    _serve()
+
+
+@mcp_app.command("install")
+def mcp_install(
+    client: str = typer.Argument("claude-code", metavar="CLIENT",
+                                 help="claude-code | claude-desktop | cursor | goose | cline | "
+                                      "continue | openhands | open-webui"),
+    json_out: bool = JSON,
+) -> None:
+    """Print the configuration that registers kx with an agent client."""
+    _print_snippet(client, json_out)
+
+
+@mcp_app.command("info")
+def mcp_info(json_out: bool = JSON) -> None:
+    """List the tools this server exposes and whether the mcp package is installed."""
+    _print_info(json_out)
 
 
 # ── Config ────────────────────────────────────────────────────────────────

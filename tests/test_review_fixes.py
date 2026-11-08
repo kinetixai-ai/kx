@@ -299,7 +299,7 @@ def test_rag_ignores_dotfiles_and_handles_missing_and_forgotten_paths(tmp_path):
 
 def test_windows_paths_with_spaces_are_quoted(monkeypatch):
     cmd = r"C:\Program Files\kx\kx.exe"
-    assert mcp_server.config_snippet("open-webui", cmd)["snippet"] == f'uvx mcpo --port 8000 -- "{cmd}" mcp'
+    assert mcp_server.config_snippet("open-webui", cmd)["snippet"] == f'uvx mcpo --port 8000 -- "{cmd}" mcp serve'
     monkeypatch.setattr(sys, "platform", "win32")
     g = mcp_server.config_snippet("goose", cmd)
     assert g["file"] == r"%APPDATA%\Block\goose\config\config.yaml"
