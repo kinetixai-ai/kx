@@ -6,18 +6,31 @@ name: release
 #     workflow release.yml, environment pypi; no token stored anywhere)
 #   - build standalone kx binaries for Linux, macOS and Windows
 #   - attach wheel, sdist, binaries and SHA256SUMS to the GitHub release
+#
+# Run it by hand ("Run workflow", with an existing tag) to rebuild the
+# binaries and release files for that tag without publishing to PyPI again.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to rebuild, e.g. v0.2.1"
+        required: true
 
 permissions:
   contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   dist:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -25,7 +38,7 @@ jobs:
         run: |
           VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
           INIT="$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('src/kinetixai/__init__.py').read()).group(1))")"
-          test "v$VERSION" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != v$VERSION in pyproject.toml"; exit 1; }
+          test "v$VERSION" = "$TAG" || { echo "tag $TAG != v$VERSION in pyproject.toml"; exit 1; }
           test "$VERSION" = "$INIT" || { echo "__init__.py says $INIT, pyproject says $VERSION"; exit 1; }
       - run: pip install build twine
       - run: python -m build
@@ -38,6 +51,7 @@ jobs:
 
   pypi:
     needs: dist
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -71,6 +85,8 @@ jobs:
       KX_DATA_DIR: ${{ github.workspace }}/.kx-bin/data
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -86,6 +102,8 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/kx.exe; fi
           "$BIN" --version
           "$BIN" library add --from-file tests/fixtures/papers.json
+          "$BIN" rag index --no-embeddings
+          "$BIN" rag ask "low rank adaptation" --no-llm
           python packaging/mcp_smoke.py "$BIN" mcp
           mkdir -p out
           cp "$BIN" "out/${{ matrix.asset }}"
@@ -97,6 +115,10 @@ jobs:
 
   release:
     needs: [dist, pypi, binaries]
+    # pypi is skipped on a manual rebuild; everything else must have passed.
+    if: >-
+      always() && needs.dist.result == 'success' && needs.binaries.result == 'success'
+      && (needs.pypi.result == 'success' || needs.pypi.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -113,7 +135,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="$GITHUB_REF_NAME"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" assets/* --clobber
           else
