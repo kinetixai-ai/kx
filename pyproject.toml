@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kinetixai"
-version = "0.2.0"
+version = "0.2.1"
 description = "kx: papers to code, models and datasets, a local paper library, private RAG over your PDFs, and an MCP server for open-source agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,8 +39,10 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://kinetixai.ai/cli/"
-Documentation = "https://kinetixai.ai/cli/"
-Source = "https://github.com/rpaut03l/kinetixai-labs/tree/main/cli"
+Documentation = "https://kinetixai.ai/docs/cli/"
+Source = "https://github.com/kinetixai-ai/kx"
+Issues = "https://github.com/kinetixai-ai/kx/issues"
+Changelog = "https://github.com/kinetixai-ai/kx/releases"
 
 [project.scripts]
 kx = "kinetixai.cli:main"

@@ -1,5 +1,7 @@
 # kx: the KinetixAI command line
 
+[![PyPI](https://img.shields.io/pypi/v/kinetixai)](https://pypi.org/project/kinetixai/) [![ci](https://github.com/kinetixai-ai/kx/actions/workflows/ci.yml/badge.svg)](https://github.com/kinetixai-ai/kx/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 From a paper to its **code**, **models** and **datasets**, a **local paper
 library** with BibTeX/APA export, **private Q&A over your own PDFs** (BM25 in
 pure Python, plus Ollama when it is running), and an **MCP server** so
@@ -12,8 +14,7 @@ open-source agents can use all of it. macOS, Linux and Windows, Python 3.10+.
 | macOS / Linux | `curl -fsSL https://kinetixai.ai/install.sh \| sh` |
 | Windows (PowerShell) | `irm https://kinetixai.ai/install.ps1 \| iex` |
 | Any OS, PyPI | `pipx install "kinetixai[rag,mcp]"` |
-| Any OS, from kinetixai.ai | `pipx install "kinetixai[rag,mcp] @ https://kinetixai.ai/cli/dl/kinetixai-0.2.0-py3-none-any.whl"` |
-| From source (repo access) | `pipx install "git+https://github.com/rpaut03l/kinetixai-labs.git#subdirectory=cli"` |
+| From source | `pipx install "git+https://github.com/kinetixai-ai/kx.git"` |
 | No Python | standalone `kx` binaries: coming with the first release |
 
 The installers never use sudo/Administrator, check for Python 3.10+, verify the
@@ -123,3 +124,21 @@ pytest -q                                      # offline; every HTTP source is m
 Standalone binary: `pip install ".[rag,mcp,build]"` then
 `pyinstaller --onefile --name kx --collect-submodules kinetixai --collect-all mcp --copy-metadata mcp packaging/kx_entry.py`.
 `python packaging/mcp_smoke.py dist/kx mcp` does a real MCP handshake against it.
+
+## Contributing and support
+
+Bugs and ideas: [open an issue](https://github.com/kinetixai-ai/kx/issues).
+Pull requests are welcome; please run `pytest -q` first. Security problems:
+see [SECURITY.md](SECURITY.md), not public issues.
+
+## Releasing
+
+Bump the version in `pyproject.toml` and `src/kinetixai/__init__.py`, merge,
+then `git tag vX.Y.Z && git push origin vX.Y.Z`. The release workflow
+publishes to PyPI (trusted publishing, no stored token), builds binaries for
+Linux, macOS and Windows and attaches them with `SHA256SUMS` to the GitHub
+release.
+
+## License
+
+MIT. Copyright (c) 2026 Rohit S Patel / Narmadya Innovations.

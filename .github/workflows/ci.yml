@@ -1,0 +1,154 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Isolated, throwaway state for the smoke test on every OS.
+      KX_CONFIG_DIR: ${{ github.workspace }}/.kx-smoke/config
+      KX_DATA_DIR: ${{ github.workspace }}/.kx-smoke/data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - name: Unit tests (offline, every source mocked)
+        run: pytest -q
+      - name: Smoke test
+        run: |
+          set -eux
+          kx --version
+          kx doctor --json > doctor.json
+          python -c "import json; d = json.load(open('doctor.json')); assert d['python']['ok'], d; print(d['os'])"
+          kx library add --from-file tests/fixtures/papers.json
+          kx library list
+          kx cite 1 --format bibtex
+          kx library export --format apa
+          kx rag index --no-embeddings
+          kx rag ask "what does LoRA freeze?" --no-llm --json > rag.json
+          python -c "import json; d = json.load(open('rag.json')); assert d['passages'][0]['key'] == 'arxiv:2106.09685', d; assert d['local']"
+          kx rag ask "tiling between HBM and SRAM" --no-llm
+          kx mcp --config goose
+          kx mcp --config claude-desktop --json
+          python packaging/mcp_smoke.py kx mcp
+
+  installers:
+    name: installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        run: python -m pip wheel --no-deps --wheel-dir wheelhouse .
+      - name: Fetch the installers from kinetixai.ai
+        shell: bash
+        run: |
+          mkdir -p public
+          curl -fsSL https://kinetixai.ai/install.sh -o public/install.sh
+          curl -fsSL https://kinetixai.ai/install.ps1 -o public/install.ps1
+      - name: install.sh with pipx, then without
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eux
+          WHL="$(ls wheelhouse/kinetixai-*.whl)"
+          sh -n public/install.sh
+          KX_WHEEL="$WHL" sh public/install.sh
+          KX_WHEEL="$WHL" KX_NO_PIPX=1 KX_HOME="$RUNNER_TEMP/kxhome" sh public/install.sh
+          "$RUNNER_TEMP/kxhome/venv/bin/kx" doctor --offline
+      - name: install.ps1 with pipx, then without
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $whl = (Get-ChildItem wheelhouse\kinetixai-*.whl).FullName
+          $env:KX_WHEEL = $whl
+          ./public/install.ps1
+          $env:KX_NO_PIPX = '1'
+          $env:KX_NO_MODIFY_PATH = '1'
+          $env:KX_HOME = Join-Path $env:RUNNER_TEMP 'kxhome'
+          ./public/install.ps1
+          & (Join-Path $env:KX_HOME 'venv\Scripts\kx.exe') doctor --offline
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  binaries:
+    name: binary (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: kx-linux-x86_64
+          - os: macos-latest
+            asset: kx-macos-arm64
+          - os: windows-latest
+            asset: kx-windows-x86_64.exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      KX_CONFIG_DIR: ${{ github.workspace }}/.kx-bin/config
+      KX_DATA_DIR: ${{ github.workspace }}/.kx-bin/data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ".[rag,mcp,build]"
+      - name: Build one-file binary
+        run: >
+          pyinstaller --onefile --name kx --clean --noconfirm
+          --collect-submodules kinetixai --collect-all mcp --copy-metadata mcp
+          packaging/kx_entry.py
+      - name: Smoke-test the binary
+        run: |
+          set -eux
+          BIN=dist/kx
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/kx.exe; fi
+          "$BIN" --version
+          "$BIN" doctor --offline --json > /dev/null
+          "$BIN" library add --from-file tests/fixtures/papers.json
+          "$BIN" rag index --no-embeddings
+          "$BIN" rag ask "low rank adaptation" --no-llm
+          python packaging/mcp_smoke.py "$BIN" mcp
+          mkdir -p out
+          cp "$BIN" "out/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,124 @@
+name: release
+
+# Tag a release (vX.Y.Z, matching pyproject.toml) to:
+#   - build the wheel and sdist, and upload them to PyPI with trusted
+#     publishing (PyPI project kinetixai -> publisher kinetixai-ai/kx,
+#     workflow release.yml, environment pypi; no token stored anywhere)
+#   - build standalone kx binaries for Linux, macOS and Windows
+#   - attach wheel, sdist, binaries and SHA256SUMS to the GitHub release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  dist:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tag must match the package version
+        run: |
+          VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          INIT="$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('src/kinetixai/__init__.py').read()).group(1))")"
+          test "v$VERSION" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != v$VERSION in pyproject.toml"; exit 1; }
+          test "$VERSION" = "$INIT" || { echo "__init__.py says $INIT, pyproject says $VERSION"; exit 1; }
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/*
+          if-no-files-found: error
+
+  pypi:
+    needs: dist
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  binaries:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: kx-linux-x86_64
+          - os: macos-latest
+            asset: kx-macos-arm64
+          - os: windows-latest
+            asset: kx-windows-x86_64.exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      KX_CONFIG_DIR: ${{ github.workspace }}/.kx-bin/config
+      KX_DATA_DIR: ${{ github.workspace }}/.kx-bin/data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ".[rag,mcp,build]"
+      - run: >
+          pyinstaller --onefile --name kx --clean --noconfirm
+          --collect-submodules kinetixai --collect-all mcp --copy-metadata mcp
+          packaging/kx_entry.py
+      - name: Smoke-test and stage
+        run: |
+          set -eux
+          BIN=dist/kx
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/kx.exe; fi
+          "$BIN" --version
+          "$BIN" library add --from-file tests/fixtures/papers.json
+          python packaging/mcp_smoke.py "$BIN" mcp
+          mkdir -p out
+          cp "$BIN" "out/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: [dist, pypi, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: assets
+        run: sha256sum * | tee SHA256SUMS
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber
+          else
+            gh release create "$TAG" assets/* --title "kx $TAG" --verify-tag \
+              --notes "kx $TAG. Install: curl -fsSL https://kinetixai.ai/install.sh | sh (macOS/Linux), irm https://kinetixai.ai/install.ps1 | iex (Windows), or download a standalone binary below and check it against SHA256SUMS."
+          fi
