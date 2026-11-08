@@ -28,20 +28,77 @@ class EngineError(RuntimeError):
     pass
 
 
+# Reasoning models (qwen3, deepseek-r1, ...) narrate before answering.
+_THINK = re.compile(r"<(think|thinking|reasoning|scratchpad)>.*?</\1>", re.S | re.I)
+_THINK_OPEN = re.compile(r"<(?:think|thinking|reasoning|scratchpad)>.*$", re.S | re.I)
+MAX_TOKENS = 16000
+
+
 def _strip_fences(text: str) -> str:
+    text = _THINK.sub("", text or "")
+    text = _THINK_OPEN.sub("", text)  # truncated: opening tag, no close
     m = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
     return (m.group(1) if m else text).strip()
 
 
+def _balanced(text: str) -> str | None:
+    """First complete {...} object, ignoring braces inside strings."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def _parse(text: str) -> dict:
-    text = _strip_fences(text)
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        raise EngineError("the model returned no JSON object.")
+    cleaned = _strip_fences(text)
+    candidate = _balanced(cleaned)
+    if candidate is None:
+        snippet = (text or "").strip()[:200].replace("\n", " ")
+        if not snippet:
+            raise EngineError(
+                "the model returned an empty response. Reasoning models often spend the "
+                "whole budget on <think>; try a non-reasoning model (qwen2.5, llama3.1) "
+                "or raise the model's context length.")
+        raise EngineError(
+            f"the model returned no JSON object. It said: {snippet!r}")
     try:
-        return json.loads(text[start:end + 1])
+        return json.loads(candidate)
     except json.JSONDecodeError as exc:
         raise EngineError(f"the model returned invalid JSON ({exc}).")
+
+
+def _message_text(payload: dict, where: str) -> str:
+    """Content from an OpenAI-shaped reply, tolerating reasoning fields."""
+    try:
+        choice = payload["choices"][0]
+    except (KeyError, IndexError, TypeError):
+        raise EngineError(f"{where}: unexpected response shape: {str(payload)[:200]}")
+    msg = choice.get("message") or {}
+    text = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+    if not text.strip() and choice.get("finish_reason") == "length":
+        raise EngineError(
+            f"{where}: the response hit the token limit before producing any content. "
+            "Raise the model's context window (Ollama: a Modelfile with a larger "
+            "num_ctx) or use a non-reasoning model.")
+    return text
 
 
 def _openai_compatible(base: str, model: str, system: str, user: str,
@@ -52,12 +109,19 @@ def _openai_compatible(base: str, model: str, system: str, user: str,
     body = {"model": model,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
-            "temperature": 0.3}
+            "temperature": 0.3,
+            "max_tokens": MAX_TOKENS,
+            # JSON mode: supported by OpenAI, vLLM and Ollama's /v1 endpoint.
+            "response_format": {"type": "json_object"}}
+    url = f"{base.rstrip('/')}/chat/completions"
     with httpx.Client(timeout=TIMEOUT) as client:
-        r = client.post(f"{base.rstrip('/')}/chat/completions", json=body, headers=headers)
+        r = client.post(url, json=body, headers=headers)
+        if r.status_code == 400 and "response_format" in r.text:
+            body.pop("response_format")  # endpoint predates JSON mode
+            r = client.post(url, json=body, headers=headers)
         if r.status_code >= 400:
             raise EngineError(f"LLM endpoint {base}: HTTP {r.status_code}: {r.text[:300]}")
-        return r.json()["choices"][0]["message"]["content"]
+        return _message_text(r.json(), f"LLM endpoint {base}")
 
 
 def _anthropic(model: str, system: str, user: str) -> str:
@@ -111,14 +175,32 @@ def complete(engine: str, model: str | None, system: str, user: str) -> str:
     raise EngineError(f"unknown engine '{engine}'. Engines: {', '.join(ENGINES)}")
 
 
-def synthesize(engine: str, model: str | None, system: str, user: str) -> Primer:
-    """One LLM call -> parsed, schema-checked Primer."""
-    raw = complete(engine, model, system, user)
-    data = _parse(raw)
-    try:
-        return primer_from_dict(data)
-    except PrimerSchemaError as exc:
-        raise EngineError(f"the model's JSON failed schema validation: {exc}")
+RETRY_NUDGE = ("\n\nYour last reply could not be parsed. Reply with the JSON object "
+               "ALONE: no commentary, no reasoning, no markdown fences. Start with "
+               "{ and end with }.")
+
+
+def synthesize(engine: str, model: str | None, system: str, user: str,
+               retries: int = 1) -> Primer:
+    """One LLM call -> parsed, schema-checked Primer. Retries once on a
+    malformed reply, which chatty and reasoning models produce often enough
+    to be worth absorbing here rather than failing the whole build."""
+    attempt, last = 0, None
+    while attempt <= retries:
+        prompt = user if attempt == 0 else user + RETRY_NUDGE
+        raw = complete(engine, model, system, prompt)
+        try:
+            data = _parse(raw)
+        except EngineError as exc:
+            last = exc
+            attempt += 1
+            continue
+        try:
+            return primer_from_dict(data)
+        except PrimerSchemaError as exc:
+            last = EngineError(f"the model's JSON failed schema validation: {exc}")
+            attempt += 1
+    raise last
 
 
 # ── offline outliner (no LLM) ─────────────────────────────────────────────

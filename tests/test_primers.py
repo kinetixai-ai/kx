@@ -138,3 +138,59 @@ def test_manifest_rejects_bad_shape(tmp_path: Path):
     m.write_text("just: a mapping\n", encoding="utf-8")
     with pytest.raises(ManifestError):
         load_manifest(m)
+
+
+# ── reasoning-model / malformed-reply handling ────────────────────────────
+
+def test_parse_strips_think_blocks():
+    assert _parse('<think>I should use {curly} braces</think>\n{"a": 1}') == {"a": 1}
+    assert _parse('<thinking>plan</thinking>```json\n{"a": 2}\n```') == {"a": 2}
+
+
+def test_parse_drops_unclosed_think_block():
+    # truncated reasoning model: opening tag, no close, no answer
+    with pytest.raises(EngineError, match="no JSON object|empty response"):
+        _parse("<think>still reasoning about {this}")
+
+
+def test_parse_ignores_braces_inside_strings():
+    assert _parse('{"body": "a } brace and { another"}')["body"] == "a } brace and { another"
+
+
+def test_parse_takes_first_complete_object_after_prose():
+    assert _parse('Sure! Here it is:\n{"a": 1}\nHope that helps.') == {"a": 1}
+
+
+def test_parse_empty_response_names_the_cause():
+    with pytest.raises(EngineError, match="empty response"):
+        _parse("   ")
+
+
+def test_message_text_prefers_content_then_reasoning():
+    from kinetixai.primers.engines import _message_text
+    assert _message_text({"choices": [{"message": {"content": "x"}}]}, "t") == "x"
+    assert _message_text({"choices": [{"message": {"reasoning_content": "y"}}]}, "t") == "y"
+
+
+def test_message_text_explains_truncation():
+    from kinetixai.primers.engines import _message_text
+    payload = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+    with pytest.raises(EngineError, match="token limit"):
+        _message_text(payload, "t")
+
+
+def test_synthesize_retries_once_then_succeeds(monkeypatch):
+    import kinetixai.primers.engines as e
+    calls = []
+
+    def fake_complete(engine, model, system, user):
+        calls.append(user)
+        if len(calls) == 1:
+            return "<think>no answer yet"
+        return '{"title": "T", "pages": [{"title": "p", "blocks": []}]}'
+
+    monkeypatch.setattr(e, "complete", fake_complete)
+    primer = e.synthesize("ollama", None, "sys", "user")
+    assert primer.title == "T"
+    assert len(calls) == 2
+    assert "JSON object ALONE" in calls[1]
