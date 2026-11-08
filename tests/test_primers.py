@@ -925,3 +925,68 @@ def test_every_page_failing_reports_why(tmp_path: Path, monkeypatch):
     assert "no model is loaded" in message          # the real cause survives
     assert "llamacpp" in message                    # and which engine it was
     assert "kx primers engines" in message          # and what to do next
+
+
+# ── choosing a model the server actually has ──────────────────────────────
+
+def test_embedding_models_are_not_offered_as_chat_models(monkeypatch):
+    """nomic-embed-text is installed on most RAG machines and cannot chat."""
+    _fake_http(monkeypatch, {"models": [{"name": "nomic-embed-text:latest"},
+                                        {"name": "qwen2.5:7b"},
+                                        {"name": "bge-m3:latest"}]})
+    p = pv.PROVIDERS["ollama"]
+    assert pv.chat_models(p) == ["qwen2.5:7b"]
+
+
+def test_a_configured_model_that_was_never_pulled_is_not_used(monkeypatch):
+    """ollama_model defaults to llama3.1 whether or not it exists."""
+    _fake_http(monkeypatch, {"models": [{"name": "qwen3.6-32k:latest"}]})
+    p = pv.PROVIDERS["ollama"]
+    assert pv.choose_model(p, "llama3.1") == "qwen3.6-32k:latest"
+
+
+def test_a_configured_model_wins_when_the_server_has_it(monkeypatch):
+    _fake_http(monkeypatch, {"models": [{"name": "qwen3.6-32k:latest"},
+                                        {"name": "qwen2.5:7b"}]})
+    p = pv.PROVIDERS["ollama"]
+    assert pv.choose_model(p, "qwen2.5:7b") == "qwen2.5:7b"
+
+
+def test_a_tagless_preference_matches_its_tagged_install(monkeypatch):
+    _fake_http(monkeypatch, {"models": [{"name": "llama3.1:8b"}]})
+    p = pv.PROVIDERS["ollama"]
+    assert pv.choose_model(p, "llama3.1") == "llama3.1:8b"
+
+
+def test_ollama_engine_uses_a_model_the_server_has(monkeypatch):
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(e.providers, "choose_model",
+                        lambda p, preferred=None, timeout=2.0: "qwen3.6-32k:latest")
+    seen = {}
+
+    class R:
+        status_code = 200
+        text = ""
+        @staticmethod
+        def json():
+            return {"message": {"content": "{}"}}
+
+    class C:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json=None, headers=None):
+            seen["model"] = json["model"]
+            return R()
+
+    monkeypatch.setattr(e.httpx, "Client", C)
+    e.complete("ollama", None, "s", "u")
+    assert seen["model"] == "qwen3.6-32k:latest"
+
+
+def test_ollama_with_no_chat_model_says_what_to_pull(monkeypatch):
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(e.providers, "choose_model",
+                        lambda p, preferred=None, timeout=2.0: None)
+    with pytest.raises(EngineError, match="ollama pull"):
+        e.complete("ollama", None, "s", "u")

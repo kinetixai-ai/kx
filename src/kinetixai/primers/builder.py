@@ -272,6 +272,14 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
             warnings.append(why)
         log(f"engine: {chosen} ({why})")
         req.engine = chosen
+    if req.engine != "outline" and not req.model:
+        # Name the model in the log: "it used Ollama" is not reproducible.
+        p_ = providers.get(req.engine)
+        if p_ is not None and p_.local:
+            found = providers.choose_model(p_, p_.default_model or None)
+            if found:
+                req.model = found
+                log(f"model: {found}")
     if req.engine == "outline":
         log("building offline outline (no-LLM mode)…")
         primer = engines.outline(req.topic, req.pages, personas, material.text,

@@ -1,6 +1,11 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- The Ollama engine asked for `llama3.1` whether or not it was ever pulled.
+  kx now asks the server which models it has, skips embedding models that
+  cannot chat, honours a configured name only when the server really has it
+  (matching `llama3.1` to an installed `llama3.1:8b`), and names the model it
+  chose so a run can be repeated.
 - Auto engine selection probed a port and accepted any answer under HTTP 500,
   so a plain web server on 8080 could be chosen as an inference server. The
   probe now requires a real model list, and the chosen engine is reported with

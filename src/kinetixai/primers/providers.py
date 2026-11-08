@@ -193,6 +193,37 @@ def models(p: Provider, timeout: float = 2.0) -> list[str]:
     return []
 
 
+# Models that cannot hold a chat: picking one of these would fail in a way
+# that looks like the engine being broken.
+_NOT_CHAT = ("embed", "bge-", "bge:", "e5-", "minilm", "gte-", "rerank",
+             "nomic-embed", "all-minilm", "mxbai-embed", "snowflake-arctic-embed")
+
+
+def chat_models(p: Provider, timeout: float = 2.0) -> list[str]:
+    """Served models that can actually answer a chat request."""
+    return [m for m in models(p, timeout)
+            if not any(bad in m.lower() for bad in _NOT_CHAT)]
+
+
+def choose_model(p: Provider, preferred: str | None = None,
+                 timeout: float = 2.0) -> str | None:
+    """The model to use on a local server.
+
+    A local server serves whatever is loaded, and a name from config may
+    name something that was never pulled, so a stored preference only wins
+    when the server actually has it.
+    """
+    served = chat_models(p, timeout)
+    if preferred and (not served or preferred in served):
+        return preferred
+    if preferred and served:
+        base = preferred.split(":")[0]
+        for m in served:                      # llama3.1 matches llama3.1:8b
+            if m.split(":")[0] == base:
+                return m
+    return served[0] if served else preferred
+
+
 def reachable(p: Provider, timeout: float = 2.0) -> bool | None:
     """Is a local inference server answering here? None when it does not apply."""
     if not p.local or p.protocol in ("mcp", "none"):
@@ -210,7 +241,7 @@ def pick(prefer: str | None = None, check_local: bool = True) -> tuple[str, str]
         if p.local:
             if not check_local:
                 continue
-            served = models(p)
+            served = chat_models(p)
             if served:
                 return name, (f"{p.label} at {base_url(p)} is serving "
                               f"{served[0]}" + (f" (+{len(served) - 1} more)"

@@ -267,7 +267,11 @@ def complete(engine: str, model: str | None, system: str, user: str,
     if p is None:
         raise EngineError(f"unknown engine '{engine}'. Engines: "
                           + ", ".join(providers.ALL_NAMES))
-    model = model or p.default_model or None
+    # For a local server the registry default is only a preference: what it
+    # actually serves decides. For a hosted API the default is the model.
+    requested = model
+    if not p.local:
+        model = model or p.default_model or None
 
     if p.protocol == "mcp":
         return _mcp(system, user)
@@ -283,8 +287,17 @@ def complete(engine: str, model: str | None, system: str, user: str,
             base = config.get("ollama_url", base)
         base = base.rstrip("/")
         base = base[:-3].rstrip("/") if base.endswith("/v1") else base
-        return _ollama_native(base, model or config.get("ollama_model", "llama3.1"),
-                              system, user, max_tokens, num_ctx or OLLAMA_NUM_CTX)
+        if not model:
+            # Ask Ollama what it has rather than assuming the configured
+            # name was ever pulled.
+            model = providers.choose_model(
+                p, requested or config.get("ollama_model") or p.default_model or None)
+        if not model:
+            raise EngineError(
+                f"Ollama at {base} is serving no chat model. Pull one "
+                "(`ollama pull qwen2.5:7b`) or pass --model.")
+        return _ollama_native(base, model, system, user, max_tokens,
+                              num_ctx or OLLAMA_NUM_CTX)
 
     # everything else speaks the OpenAI chat format
     base = providers.base_url(p, api_base)
@@ -294,8 +307,7 @@ def complete(engine: str, model: str | None, system: str, user: str,
     if not model and p.local:
         # A local server serves whatever is loaded; ask it rather than
         # demanding --model for something the user cannot easily name.
-        served = providers.models(p)
-        model = served[0] if served else "local-model"
+        model = providers.choose_model(p, requested or p.default_model or None) or "local-model"
     if not model:
         raise EngineError(
             f"--engine {p.name} has no default model; pass --model.")
