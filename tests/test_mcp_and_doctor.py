@@ -117,7 +117,7 @@ def test_doctor_offline_json():
     assert res.exit_code == 0, res.output
     d = json.loads(res.stdout)
     assert d["kx"] and d["python"]["ok"] is True and d["network"] == []
-    assert set(d["extras"]) == {"rag", "mcp", "keyring"}
+    assert set(d["extras"]) == {"rag", "mcp", "primers", "keyring"}
     assert d["ollama"]["running"] is False and any("Ollama" in a for a in d["advice"])
     assert d["paths"]["config"].endswith("config.json")
 
@@ -130,3 +130,18 @@ def test_doctor_human_output():
 def test_version_flag_and_json():
     assert runner.invoke(cli.app, ["--version"]).stdout.startswith("kx ")
     assert json.loads(runner.invoke(cli.app, ["version", "--json"]).stdout)["version"]
+
+
+def test_doctor_lists_the_commands_this_build_has():
+    """A stale install looks identical until a command is missing, so doctor
+    reports what the running build actually exposes."""
+    from kinetixai import doctor as doctor_mod
+    cmds = doctor_mod._commands()
+    assert {"search", "get", "primers", "convert", "mcp", "rag"} <= cmds
+
+
+def test_doctor_reports_which_build_is_running():
+    from kinetixai import doctor as doctor_mod
+    ch = doctor_mod.run(offline=True)
+    assert ch["paths"]["running"] and ch["paths"]["package"]
+    assert "primers" in ch["commands"]

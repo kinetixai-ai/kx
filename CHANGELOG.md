@@ -1,6 +1,10 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- `kx doctor` now reports which build is actually running (interpreter and
+  package path), lists the commands that build exposes, and checks the
+  `primers` extra. A stale install on PATH used to look identical to a current
+  one until a command came back "No such command".
 - `--copy-to` (and `kx config set primer_copy_to`) copies finished primers to a
   second folder — a notes directory, a shared drive, a repo. A destination that
   cannot be written is a warning, never a lost build.

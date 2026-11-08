@@ -6,6 +6,7 @@ import os
 import platform
 import shutil
 import sys
+from pathlib import Path
 import time
 
 import httpx
@@ -17,6 +18,7 @@ from .rag import ollama
 EXTRAS = {
     "pypdf": ("rag", "read PDFs for kx rag index"),
     "mcp": ("mcp", "kx mcp server for agents"),
+    "jinja2": ("primers", "kx primers build and kx convert"),
     "keyring": ("keyring", "store your token in the OS keychain"),
 }
 
@@ -41,6 +43,24 @@ def _probe(name: str, url: str, c: httpx.Client) -> dict:
         return {"name": name, "url": url, "ok": False, "status": None, "error": exc.__class__.__name__}
 
 
+def _commands() -> set[str]:
+    """Top-level commands this build actually exposes."""
+    try:
+        from .cli import app
+        names: set[str] = set()
+        for c in getattr(app, "registered_commands", []):
+            # Typer leaves name None when it comes from the function name
+            name = c.name or getattr(c.callback, "__name__", "")
+            if name:
+                names.add(name.rstrip("_").replace("_", "-"))
+        for g in getattr(app, "registered_groups", []):
+            if g.name:
+                names.add(g.name)
+        return names
+    except Exception:  # noqa: BLE001 — doctor must never be the thing that breaks
+        return set()
+
+
 def run(offline: bool = False) -> dict:
     cfg = config.load()
     endpoint = cfg["endpoint"].rstrip("/")
@@ -56,7 +76,13 @@ def run(offline: bool = False) -> dict:
             "library": str(library.library_path()),
             "rag_index": str(rag_index.index_path()),
             "kx": shutil.which("kx"),
+            # Which kx is actually running, which is not always the one on
+            # PATH: a venv, a pipx shim and a stale install look identical
+            # until a command is missing.
+            "running": sys.executable,
+            "package": str(Path(__file__).resolve().parent),
         },
+        "commands": sorted(_commands()),
         "endpoint": endpoint,
         "auth": {"signed_in_token": auth.source(endpoint) is not None, "token_source": auth.source(endpoint),
                  "store": auth.store_name()},

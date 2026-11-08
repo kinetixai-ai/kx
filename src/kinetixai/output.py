@@ -221,6 +221,13 @@ def doctor(ch: dict) -> None:
     print_(f"  OS          {o['system']} {o['release']} ({o['machine']})")
     for k, v in ch["paths"].items():
         print_(f"  {k:<11} [dim]{escape(str(v))}[/dim]")
+    cmds = ch.get("commands") or []
+    if cmds:
+        has_primers = "primers" in cmds
+        print_(f"  commands    {len(cmds)}  [dim]{escape(', '.join(cmds))}[/dim]")
+        if not has_primers:
+            print_("  [yellow]note:[/yellow] this build has no `primers` command. You are running "
+                   "an older kx than the one in your checkout.", soft_wrap=True)
     print_(f"  Endpoint    {escape(ch['endpoint'])}")
     a = ch["auth"]
     print_(f"  Token       {mark(a['signed_in_token'])} {('(' + a['token_source'] + ')') if a['token_source'] else ''}"
