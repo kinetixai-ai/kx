@@ -136,6 +136,8 @@ def advice(ch: dict) -> list[str]:
                    f"{ch['endpoint']}/account/tokens/ and run `kx login`.")
     if not ch["extras"]["rag"]["installed"]:
         out.append("PDF text for local RAG: pipx inject kinetixai pypdf")
+    if not ch["extras"]["primers"]["installed"]:
+        tips.append("pip install 'kinetixai[primers]'  (kx primers build, kx convert)")
     if not ch["extras"]["mcp"]["installed"]:
         out.append("MCP server for agents: pipx inject kinetixai mcp")
     o = ch["ollama"]

@@ -990,3 +990,66 @@ def test_ollama_with_no_chat_model_says_what_to_pull(monkeypatch):
                         lambda p, preferred=None, timeout=2.0: None)
     with pytest.raises(EngineError, match="ollama pull"):
         e.complete("ollama", None, "s", "u")
+
+
+# ── dependencies are checked before the model runs, not after ─────────────
+
+def test_preflight_runs_before_any_model_call(tmp_path: Path, monkeypatch):
+    """Discovering a missing renderer after eight pages of local inference
+    throws away everything the run produced."""
+    import importlib.util
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+
+    called = {"model": False}
+
+    def never(*a, **kw):
+        called["model"] = True
+        raise AssertionError("the model must not be called before preflight")
+
+    monkeypatch.setattr(e, "complete", never)
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: None if name == "jinja2" else real(name, *a))
+
+    req = BuildRequest(topic="T", pages=8, pdfs=1, engine="ollama",
+                       out_dir=tmp_path / "d")
+    with pytest.raises(b.MissingDependency, match="jinja2"):
+        b.build(req)
+    assert called["model"] is False
+
+
+def test_preflight_names_the_install_command(tmp_path: Path, monkeypatch):
+    import importlib.util
+    import kinetixai.primers.builder as b
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: None if name == "pptx" else real(name, *a))
+    with pytest.raises(b.MissingDependency, match=r"kinetixai\[primers\]"):
+        b.preflight(BuildRequest(topic="T", ppts=1, out_dir=tmp_path))
+
+
+def test_preflight_only_checks_what_was_asked_for(tmp_path: Path, monkeypatch):
+    """No .pptx requested means python-pptx is not required."""
+    import importlib.util
+    import kinetixai.primers.builder as b
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: None if name == "pptx" else real(name, *a))
+    b.preflight(BuildRequest(topic="T", pdfs=1, ppts=0, out_dir=tmp_path))
+
+
+def test_written_pages_survive_a_rendering_failure(tmp_path: Path, monkeypatch):
+    import kinetixai.primers.builder as b
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+    monkeypatch.setattr(b.renderer, "render_html",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    out = tmp_path / "out"
+    req = BuildRequest(topic="Rescue Me", pages=1, pdfs=0, engine="outline", out_dir=out)
+    with pytest.raises(RuntimeError, match="boom"):
+        b.build(req)
+    rescued = list(out.glob("*.primer.json"))
+    assert rescued, "the generated pages were lost"
+    data = json.loads(rescued[0].read_text())
+    assert data["pages"]

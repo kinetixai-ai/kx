@@ -90,6 +90,51 @@ class BuildResult:
         return out
 
 
+# Which import each output needs, and the extra that provides it.
+_RENDER_DEPS = [("jinja2", "the HTML renderer")]
+_PDF_DEPS = [("weasyprint", "PDF export")]
+_IMAGE_DEPS = [("pypdfium2", "PNG export"), ("PIL", "PNG export")]
+_PPTX_DEPS = [("pptx", ".pptx export")]
+
+
+def preflight(req: "BuildRequest") -> None:
+    """Check what the requested outputs need BEFORE any model is called.
+
+    Finding out after eight pages of local inference that jinja2 is missing
+    throws away everything the run just produced.
+    """
+    import importlib.util
+    import os
+
+    needed = list(_RENDER_DEPS)
+    if req.pdfs > 0 or req.images > 0:
+        if os.environ.get("KX_PDF_ENGINE", "").lower() == "playwright":
+            needed.append(("playwright", "PDF export"))
+        else:
+            needed += _PDF_DEPS
+    if req.images > 0:
+        needed += _IMAGE_DEPS
+    if req.ppts > 0:
+        needed += _PPTX_DEPS
+
+    missing = []
+    for mod, why in needed:
+        if importlib.util.find_spec(mod) is None and (mod, why) not in missing:
+            missing.append((mod, why))
+    if not missing:
+        return
+    names = ", ".join(sorted({m for m, _ in missing}))
+    uses = ", ".join(sorted({w for _, w in missing}))
+    raise MissingDependency(
+        f"{uses} needs {names}, which is not installed.\n"
+        "  pip install 'kinetixai[primers]'\n"
+        "  (pipx: pipx install --force -e '<path to kx>[primers]')")
+
+
+class MissingDependency(RuntimeError):
+    pass
+
+
 def slugify(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s[:60] or "primer"
@@ -250,10 +295,11 @@ def _synthesize_single(req: BuildRequest, sources: list[dict], source_text: str,
 
 def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> BuildResult:
     warnings: list[str] = []
-    out_dir = Path(req.out_dir).expanduser()
-    out_dir.mkdir(parents=True, exist_ok=True)
     if req.mode not in MODES:
         raise ValueError(f"mode must be one of: {', '.join(MODES)}")
+    preflight(req)          # before any model call, never after
+    out_dir = Path(req.out_dir).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. ingest + research
     log("ingesting source material…")
@@ -313,7 +359,8 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
     for i, page in enumerate(primer.pages, 1):
         over = schema.overflow_mm(page)
         if over > 0:
-            log(f"page {i} runs {over:.0f}mm past the printable area; fitting…")
+            if over >= 1:
+                log(f"page {i} runs {over:.0f}mm past the printable area; fitting…")
             for note in schema.fit_page(page, getattr(page, "must_have", None)):
                 warnings.append(f"page {i}: {note}")
     for problem in schema.validate_budget(primer):
@@ -323,7 +370,19 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
     slug = slugify(primer.title or req.topic)
     result = BuildResult(primer=primer, warnings=warnings)
     log("rendering HTML…")
-    html = renderer.render_html(primer, editable=True)
+    try:
+        html = renderer.render_html(primer, editable=True)
+    except Exception:
+        # The pages cost real time to write. Keep them so the run can be
+        # rendered later rather than repeated.
+        rescue = out_dir / f"{slug}.primer.json"
+        try:
+            jsonx.primer_to_json(primer.to_dict(), rescue)
+        except Exception:  # noqa: BLE001 — the original error is the one to report
+            pass
+        else:
+            log(f"rendering failed; the written pages are saved at {rescue}")
+        raise
     result.html_path = out_dir / f"{slug}.html"
     result.html_path.write_text(html, encoding="utf-8")
 

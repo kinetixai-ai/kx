@@ -618,7 +618,7 @@ def _primer_errors():
     from .primers.exporters.images import ImageExportError
     from .primers.exporters.pptx import PptxExportError
     return (e.EngineError, i.IngestError, r.RenderError, c.ManifestError,
-            ImageExportError, PptxExportError)
+            b.MissingDependency, ImageExportError, PptxExportError)
 
 
 def _check_engine(engine: str, primers_engines) -> str:

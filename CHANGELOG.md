@@ -1,6 +1,11 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- Output dependencies are checked before the first model call, not after the
+  last one: a missing renderer used to surface only after a full run of local
+  inference, throwing the written pages away. If rendering fails anyway, the
+  pages are saved as `<slug>.primer.json` so the run can be rendered rather
+  than repeated.
 - The Ollama engine asked for `llama3.1` whether or not it was ever pulled.
   kx now asks the server which models it has, skips embedding models that
   cannot chat, honours a configured name only when the server really has it
