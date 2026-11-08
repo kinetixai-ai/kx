@@ -183,7 +183,7 @@ def test_synthesize_retries_once_then_succeeds(monkeypatch):
     import kinetixai.primers.engines as e
     calls = []
 
-    def fake_complete(engine, model, system, user, api_base=None):
+    def fake_complete(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
         calls.append(user)
         if len(calls) == 1:
             return "<think>no answer yet"
@@ -440,7 +440,7 @@ def test_iterative_build_calls_the_model_once_per_page(tmp_path: Path, monkeypat
     monkeypatch.setattr(b, "_research", lambda topic, limit, warnings, relevance=0.18: [])
     calls: list[str] = []
 
-    def fake_complete(engine, model, system, user, api_base=None):
+    def fake_complete(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
         calls.append(user)
         return json.dumps({"title": f"Page {len(calls)}", "takeaway": "t",
                            "blocks": [dict(x) for x in DENSE_BLOCKS]})
@@ -460,7 +460,7 @@ def test_iterative_build_expands_a_sparse_page(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(b, "_research", lambda topic, limit, warnings, relevance=0.18: [])
     calls: list[str] = []
 
-    def fake_complete(engine, model, system, user, api_base=None):
+    def fake_complete(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
         calls.append(user)
         if len(calls) == 1:                      # first reply: the sparse-page bug
             return json.dumps({"title": "Thin", "blocks": [
@@ -481,3 +481,141 @@ def test_iterative_build_expands_a_sparse_page(tmp_path: Path, monkeypatch):
 def test_build_rejects_an_unknown_mode(tmp_path: Path):
     with pytest.raises(ValueError, match="mode must be"):
         build(BuildRequest(topic="t", mode="sideways", out_dir=tmp_path))
+
+
+# ── failure containment and Ollama context ────────────────────────────────
+
+def test_ollama_uses_its_native_api_with_num_ctx(monkeypatch):
+    """The OpenAI-compatible endpoint cannot set num_ctx, and Ollama's 4096
+    default leaves a small model no room to write a full page."""
+    import kinetixai.primers.engines as e
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        @staticmethod
+        def json():
+            return {"message": {"content": '{"ok": 1}'}}
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json=None, headers=None):
+            seen["url"] = url
+            seen["body"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(e.httpx, "Client", FakeClient)
+    e.complete("ollama", "qwen2.5:7b", "sys", "user", num_ctx=16384)
+    assert seen["url"].endswith("/api/chat")          # native, not /v1/chat/completions
+    assert seen["body"]["options"]["num_ctx"] == 16384
+    assert seen["body"]["format"] == "json"
+
+
+def test_ollama_v1_suffix_is_stripped(monkeypatch):
+    import kinetixai.primers.engines as e
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        @staticmethod
+        def json():
+            return {"message": {"content": "{}"}}
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json=None, headers=None):
+            seen["url"] = url
+            return FakeResponse()
+
+    monkeypatch.setattr(e.httpx, "Client", FakeClient)
+    e.complete("ollama", "m", "s", "u", api_base="http://localhost:11434/v1")
+    assert seen["url"] == "http://localhost:11434/api/chat"
+
+
+def test_empty_ollama_reply_blames_the_context_window(monkeypatch):
+    import kinetixai.primers.engines as e
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        @staticmethod
+        def json():
+            return {"message": {"content": ""}, "done_reason": "length"}
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, *a, **kw): return FakeResponse()
+
+    monkeypatch.setattr(e.httpx, "Client", FakeClient)
+    with pytest.raises(EngineError, match="num_ctx|context"):
+        e.complete("ollama", "m", "s", "u")
+
+
+def test_network_timeouts_become_readable_errors(monkeypatch):
+    """A timeout used to escape as a traceback half way through a build."""
+    import httpx
+    import kinetixai.primers.engines as e
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, *a, **kw): raise httpx.ReadTimeout("too slow")
+
+    monkeypatch.setattr(e.httpx, "Client", FakeClient)
+    with pytest.raises(EngineError, match="timed out"):
+        e.complete("ollama", "m", "s", "u")
+    with pytest.raises(EngineError, match="timed out"):
+        e.complete("vllm", "m", "s", "u")
+
+
+def test_connection_refused_names_the_fix(monkeypatch):
+    import httpx
+    import kinetixai.primers.engines as e
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, *a, **kw): raise httpx.ConnectError("nope")
+
+    monkeypatch.setattr(e.httpx, "Client", FakeClient)
+    with pytest.raises(EngineError, match="ollama serve"):
+        e.complete("ollama", "m", "s", "u")
+
+
+def test_one_failing_page_does_not_lose_the_others(tmp_path: Path, monkeypatch):
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(b, "_research", lambda topic, limit, warnings, relevance=0.18: [])
+    calls = {"n": 0}
+
+    def flaky(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("some unexpected failure")      # not an EngineError
+        return json.dumps({"title": f"Page {calls['n']}", "takeaway": "t",
+                           "blocks": [dict(x) for x in DENSE_BLOCKS]})
+
+    monkeypatch.setattr(e, "complete", flaky)
+    req = BuildRequest(topic="T", pages=3, pdfs=0, jsons=0, engine="ollama",
+                       mode="iterative", out_dir=tmp_path / "d")
+    res = b.build(req)
+    assert len(res.primer.pages) == 2                          # page 2 lost, not the build
+    assert any("some unexpected failure" in w for w in res.warnings)
+
+
+def test_page_skeleton_lists_every_required_block():
+    spec = blueprint.plan(8)[6]           # evaluation
+    sk = blueprint.page_skeleton(spec)
+    for kind in ("table", "code", "cloud", "chart"):
+        assert kind in sk
+    assert "Do not stop early" in sk

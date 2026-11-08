@@ -29,7 +29,13 @@ ALIASES = {"vllm": "local-vllm", "claude": "anthropic", "google": "gemini",
            "gpt": "openai", "none": "outline", "offline": "outline"}
 ENGINES = ("local-vllm", "ollama", "openai", "anthropic", "gemini", "mcp", "outline")
 ALL_ENGINE_NAMES = tuple(sorted(set(ENGINES) | set(ALIASES)))
-TIMEOUT = httpx.Timeout(300.0, connect=15.0)
+TIMEOUT = httpx.Timeout(float(os.environ.get("KX_LLM_TIMEOUT", "600")), connect=15.0)
+
+# Ollama defaults to a 4096-token context, which the Primer system prompt plus
+# the sources fills on its own — leaving a 7B model no room to answer, which
+# looks exactly like a model that "writes sparse pages". The native API is the
+# only way to raise it, so that is what the ollama engine uses.
+OLLAMA_NUM_CTX = int(os.environ.get("KX_OLLAMA_NUM_CTX", "32768"))
 
 # Reasoning models (qwen3, deepseek-r1, ...) narrate before answering.
 _THINK = re.compile(r"<(think|thinking|reasoning|scratchpad)>.*?</\1>", re.S | re.I)
@@ -112,8 +118,47 @@ def _message_text(payload: dict, where: str) -> str:
     return text
 
 
+def _ollama_native(base: str, model: str, system: str, user: str,
+                   max_tokens: int, num_ctx: int = OLLAMA_NUM_CTX) -> str:
+    """Ollama's own /api/chat, so num_ctx can be set per request."""
+    body = {"model": model, "stream": False, "format": "json",
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "options": {"temperature": 0.3, "num_ctx": num_ctx,
+                        "num_predict": max_tokens}}
+    url = f"{base.rstrip('/')}/api/chat"
+    with httpx.Client(timeout=TIMEOUT) as client:
+        try:
+            r = client.post(url, json=body)
+        except httpx.HTTPError as exc:
+            raise EngineError(_net_hint("Ollama", base, exc))
+        if r.status_code >= 400:
+            raise EngineError(f"Ollama at {base}: HTTP {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        text = (data.get("message") or {}).get("content") or ""
+        if not text.strip():
+            reason = data.get("done_reason") or "unknown"
+            raise EngineError(
+                f"Ollama returned no content (done_reason={reason}). The model may have "
+                f"run out of context: raise KX_OLLAMA_NUM_CTX (currently {num_ctx}) or "
+                "use a smaller --pages value.")
+        return text
+
+
+def _net_hint(what: str, base: str, exc: Exception) -> str:
+    kind = exc.__class__.__name__
+    if "Timeout" in kind:
+        return (f"{what} at {base} timed out after {TIMEOUT.read:.0f}s. A small model "
+                "writing a full page can be slow: raise KX_LLM_TIMEOUT, use a smaller "
+                "--pages value, or try a faster model.")
+    if "Connect" in kind:
+        return (f"{what} at {base} is not reachable ({kind}). Is it running? "
+                "For Ollama: `ollama serve`.")
+    return f"{what} at {base} failed ({kind}: {exc})."
+
+
 def _openai_compatible(base: str, model: str, system: str, user: str,
-                       key: str | None = None) -> str:
+                       key: str | None = None, max_tokens: int = MAX_TOKENS) -> str:
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -121,15 +166,18 @@ def _openai_compatible(base: str, model: str, system: str, user: str,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "temperature": 0.3,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": max_tokens,
             # JSON mode: supported by OpenAI, vLLM and Ollama's /v1 endpoint.
             "response_format": {"type": "json_object"}}
     url = f"{base.rstrip('/')}/chat/completions"
     with httpx.Client(timeout=TIMEOUT) as client:
-        r = client.post(url, json=body, headers=headers)
-        if r.status_code == 400 and "response_format" in r.text:
-            body.pop("response_format")  # endpoint predates JSON mode
+        try:
             r = client.post(url, json=body, headers=headers)
+            if r.status_code == 400 and "response_format" in r.text:
+                body.pop("response_format")  # endpoint predates JSON mode
+                r = client.post(url, json=body, headers=headers)
+        except httpx.HTTPError as exc:
+            raise EngineError(_net_hint("the LLM endpoint", base, exc))
         if r.status_code >= 400:
             raise EngineError(f"LLM endpoint {base}: HTTP {r.status_code}: {r.text[:300]}")
         return _message_text(r.json(), f"LLM endpoint {base}")
@@ -142,8 +190,11 @@ def _anthropic(model: str, system: str, user: str) -> str:
     body = {"model": model, "max_tokens": MAX_TOKENS, "system": system,
             "messages": [{"role": "user", "content": user}]}
     with httpx.Client(timeout=TIMEOUT) as client:
-        r = client.post("https://api.anthropic.com/v1/messages", json=body,
-                        headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+        try:
+            r = client.post("https://api.anthropic.com/v1/messages", json=body,
+                            headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+        except httpx.HTTPError as exc:
+            raise EngineError(_net_hint("the Anthropic API", "api.anthropic.com", exc))
         if r.status_code >= 400:
             raise EngineError(f"Anthropic API: HTTP {r.status_code}: {r.text[:300]}")
         return "".join(b.get("text", "") for b in r.json().get("content", []))
@@ -160,7 +211,10 @@ def _gemini(model: str, system: str, user: str) -> str:
             "generationConfig": {"responseMimeType": "application/json",
                                  "maxOutputTokens": MAX_TOKENS}}
     with httpx.Client(timeout=TIMEOUT) as client:
-        r = client.post(url, json=body)
+        try:
+            r = client.post(url, json=body)
+        except httpx.HTTPError as exc:
+            raise EngineError(_net_hint("the Gemini API", "generativelanguage.googleapis.com", exc))
         if r.status_code >= 400:
             raise EngineError(f"Gemini API: HTTP {r.status_code}: {r.text[:300]}")
         data = r.json()
@@ -205,27 +259,27 @@ def _mcp(system: str, user: str) -> str:
 
 
 def complete(engine: str, model: str | None, system: str, user: str,
-             api_base: str | None = None) -> str:
+             api_base: str | None = None, max_tokens: int = MAX_TOKENS,
+             num_ctx: int | None = None) -> str:
     name = canonical(engine)
     if name == "local-vllm":
         base = (api_base or os.environ.get("KX_VLLM_URL")
                 or os.environ.get("VLLM_BASE_URL") or "http://localhost:8000/v1")
         return _openai_compatible(base, model or "Qwen/Qwen2.5-14B-Instruct", system, user,
-                                  key=os.environ.get("KX_VLLM_KEY"))
+                                  key=os.environ.get("KX_VLLM_KEY"), max_tokens=max_tokens)
     if name == "ollama":
-        base = api_base or (os.environ.get("OLLAMA_HOST")
-                            or config.get("ollama_url", "http://localhost:11434"))
-        base = base.rstrip("/")
-        if not base.endswith("/v1"):
-            base += "/v1"
-        return _openai_compatible(base, model or config.get("ollama_model", "llama3.1"),
-                                  system, user)
+        base = (api_base or os.environ.get("OLLAMA_HOST")
+                or config.get("ollama_url", "http://localhost:11434")).rstrip("/")
+        base = base[:-3].rstrip("/") if base.endswith("/v1") else base
+        return _ollama_native(base, model or config.get("ollama_model", "llama3.1"),
+                              system, user, max_tokens, num_ctx or OLLAMA_NUM_CTX)
     if name == "openai":
         key = os.environ.get("OPENAI_API_KEY")
         if not key:
             raise EngineError("set OPENAI_API_KEY to use --engine openai.")
         return _openai_compatible(api_base or "https://api.openai.com/v1",
-                                  model or "gpt-4o-mini", system, user, key=key)
+                                  model or "gpt-4o-mini", system, user, key=key,
+                                  max_tokens=max_tokens)
     if name == "anthropic":
         return _anthropic(model or "claude-sonnet-4-5", system, user)
     if name == "gemini":
@@ -240,13 +294,15 @@ RETRY_NUDGE = ("\n\nYour last reply could not be parsed. Reply with the JSON obj
                "{ and end with }.")
 
 
-def _attempt(engine, model, system, user, api_base, retries, parse):
+def _attempt(engine, model, system, user, api_base, retries, parse,
+             max_tokens=MAX_TOKENS, num_ctx=None):
     """Shared retry loop: chatty and reasoning models produce a malformed
     reply often enough that absorbing one retry here beats failing a build."""
     attempt, last = 0, None
     while attempt <= retries:
         prompt = user if attempt == 0 else user + RETRY_NUDGE
-        raw = complete(engine, model, system, prompt, api_base=api_base)
+        raw = complete(engine, model, system, prompt, api_base=api_base,
+                       max_tokens=max_tokens, num_ctx=num_ctx)
         try:
             return parse(_parse(raw))
         except (EngineError, PrimerSchemaError) as exc:
@@ -257,20 +313,27 @@ def _attempt(engine, model, system, user, api_base, retries, parse):
 
 
 def synthesize(engine: str, model: str | None, system: str, user: str,
-               retries: int = 1, api_base: str | None = None) -> Primer:
+               retries: int = 1, api_base: str | None = None,
+               num_ctx: int | None = None) -> Primer:
     """One LLM call -> parsed, schema-checked Primer (whole document)."""
-    return _attempt(engine, model, system, user, api_base, retries, primer_from_dict)
+    return _attempt(engine, model, system, user, api_base, retries, primer_from_dict,
+                    num_ctx=num_ctx)
+
+
+PAGE_MAX_TOKENS = 6000      # one page is small; a big cap only invites timeouts
 
 
 def synthesize_page(engine: str, model: str | None, system: str, user: str,
-                    retries: int = 1, api_base: str | None = None) -> Page:
+                    retries: int = 1, api_base: str | None = None,
+                    num_ctx: int | None = None) -> Page:
     """One LLM call -> parsed, schema-checked single Page."""
     def parse(data: dict) -> Page:
         # tolerate a model that wraps the page in {"pages": [...]} anyway
         if "blocks" not in data and isinstance(data.get("pages"), list) and data["pages"]:
             data = data["pages"][0]
         return page_from_dict(data)
-    return _attempt(engine, model, system, user, api_base, retries, parse)
+    return _attempt(engine, model, system, user, api_base, retries, parse,
+                    max_tokens=PAGE_MAX_TOKENS, num_ctx=num_ctx)
 
 
 # ── offline outliner (no LLM) ─────────────────────────────────────────────

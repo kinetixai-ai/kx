@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 
-from .blueprint import PageSpec, page_prompt_block
+from .blueprint import PageSpec, page_prompt_block, page_skeleton
 from .schema import BLOCK_TYPES, SECTIONS_MAX, SECTIONS_MIN, WORDS_MAX, WORDS_MIN
 
 BLOCK_REFERENCE = """\
@@ -189,6 +189,8 @@ def build_page_prompt(topic: str, spec: PageSpec, index: int, total: int,
     if source_text:
         parts.append("SOURCE MATERIAL (from the user's file/repo/paper):\n"
                      + source_text[:14000])
+    # last, because it is the instruction that matters most and recency wins
+    parts.append(page_skeleton(spec))
     parts.append("Return the JSON object for this one page now.")
     return "\n\n".join(parts)
 
@@ -201,10 +203,9 @@ def expand_prompt(page_json: dict, missing: list[str], spec: PageSpec,
         f"This is page {index} of {total} ({spec.role}). The page below is too sparse "
         "to print — it would leave most of an A4 page blank.",
         "WHAT IS MISSING:\n- " + "\n- ".join(missing),
-        "KEEP every existing block exactly as it is, then ADD blocks until the page "
-        "meets the density quota. Expand the numbered sections to cover:\n  "
-        + "\n  ".join(spec.sections),
+        "KEEP every existing block exactly as it is, then ADD the blocks it lacks.",
         "THE PAGE SO FAR:\n" + json.dumps(page_json, ensure_ascii=False)[:9000],
+        page_skeleton(spec),
         "Return the COMPLETE page as one JSON object (existing blocks plus the new ones).",
     ])
 

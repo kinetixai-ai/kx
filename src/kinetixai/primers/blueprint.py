@@ -190,3 +190,32 @@ def page_prompt_block(spec: PageSpec, index: int, total: int, topic: str) -> str
     if spec.note:
         lines.append("Note: " + spec.note)
     return "\n".join(lines)
+
+
+# How many of each visual block a page should carry, and in what shape. A
+# small model follows a concrete checklist far better than prose rules.
+_SHAPE = {
+    "bento": "bento with exactly 3 cards",
+    "table": "table with 4 columns and 3 rows",
+    "flow": "flow with 4 steps",
+    "steps": "steps with 4 items",
+    "hierarchy": "hierarchy with 4 levels",
+    "chart": "chart with 3 or 4 bars (numbers from the sources only)",
+    "code": "code block, bash or python, 3 lines",
+    "cloud": "cloud with one short punchy line",
+    "callout": "callout",
+}
+
+
+def page_skeleton(spec: PageSpec, max_sections: int = 5) -> str:
+    """An explicit block-by-block checklist for one page."""
+    lines = ["EMIT EXACTLY THIS BLOCK SEQUENCE, IN THIS ORDER:"]
+    n = 0
+    for title in spec.sections[:max_sections]:
+        n += 1
+        lines.append(f'{n}. section, num "{n}", title "{title}", body 30-45 words')
+    for kind in spec.must_have:
+        n += 1
+        lines.append(f"{n}. {_SHAPE.get(kind, kind)}")
+    lines.append(f"That is {n} blocks. Do not stop early and do not add more.")
+    return "\n".join(lines)

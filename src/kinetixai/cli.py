@@ -638,6 +638,14 @@ def _run_build(req, json_out: bool):
     except _primer_errors() as exc:
         output.error(str(exc))
         raise typer.Exit(code=1)
+    except KeyboardInterrupt:
+        output.error("interrupted.")
+        raise typer.Exit(code=130)
+    except Exception as exc:  # noqa: BLE001 — a build must never end in a traceback
+        output.error(f"{exc.__class__.__name__}: {exc}")
+        output.err.print("[dim]If this looks like a bug, please report it with this line "
+                         "at https://github.com/kinetixai-ai/kx/issues[/dim]")
+        raise typer.Exit(code=1)
     for w in res.warnings:
         output.warn(w)
     if json_out:
@@ -678,6 +686,9 @@ def primers_build(
                                            help="Override the engine's endpoint, e.g. http://localhost:8000/v1"),
     mode: str = typer.Option("iterative", "--mode",
                              help="iterative-per-page (dense, one call per page) | single (one call, large models)"),
+    num_ctx: Optional[int] = typer.Option(None, "--num-ctx", min=2048,
+                                          help="Ollama context window. Its 4096 default is too small "
+                                               "for a full page; kx asks for 32768 unless set."),
     min_sections: int = typer.Option(5, "--min-sections-per-page", min=1, max=9,
                                      help="Density floor: numbered sections required per page."),
     relevance: float = typer.Option(0.18, "--relevance", min=0.0, max=1.0,
@@ -699,7 +710,8 @@ def primers_build(
         personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark, author=author, engine=engine, model=model,
-        api_base=api_base, mode=mode_v, min_sections=min_sections, relevance=relevance,
+        api_base=api_base, num_ctx=num_ctx, mode=mode_v,
+        min_sections=min_sections, relevance=relevance,
         verify_citations=verify_citations, out_dir=out_dir)
     _run_build(req, json_out)
 
@@ -750,6 +762,7 @@ def convert(
                                help="outline (no LLM) | ollama | vllm | claude | gemini | openai | mcp"),
     model: Optional[str] = typer.Option(None, "--model", "-m"),
     api_base: Optional[str] = typer.Option(None, "--api-base"),
+    num_ctx: Optional[int] = typer.Option(None, "--num-ctx", min=2048),
     mode: str = typer.Option("iterative", "--mode"),
     out: Optional[Path] = typer.Option(None, "--out", "-o",
                                        help="Output PDF path (its folder receives the other artifacts)."),
@@ -764,7 +777,8 @@ def convert(
         topic=name, source=source, personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark, author=author, engine=engine, model=model,
-        api_base=api_base, mode="iterative" if mode.startswith("iterative") else mode,
+        api_base=api_base, num_ctx=num_ctx,
+        mode="iterative" if mode.startswith("iterative") else mode,
         out_dir=out_dir, style=style)
     from .primers import builder as pb
     if out:  # honor the exact --out filename

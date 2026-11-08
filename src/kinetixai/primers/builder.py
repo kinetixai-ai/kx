@@ -45,6 +45,7 @@ class BuildRequest:
     engine: str = "outline"
     model: str | None = None
     api_base: str | None = None
+    num_ctx: int | None = None
     mode: str = "iterative"
     min_sections: int = schema.SECTIONS_MIN
     verify_citations: bool = False
@@ -151,9 +152,13 @@ def _synthesize_iterative(req: BuildRequest, sources: list[dict], source_text: s
                                          source_text, sources, titles)
         try:
             page = engines.synthesize_page(req.engine, req.model, prompts.PAGE_SYSTEM_PROMPT,
-                                           user, api_base=req.api_base)
+                                           user, api_base=req.api_base, num_ctx=req.num_ctx)
         except engines.EngineError as exc:
             warnings.append(f"page {i} ({spec.role}) failed: {exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001 — keep the pages already written
+            warnings.append(f"page {i} ({spec.role}) failed "
+                            f"({exc.__class__.__name__}: {exc})")
             continue
 
         d = schema.density(page, req.min_sections, spec.must_have)
@@ -185,9 +190,10 @@ def _expand(req: BuildRequest, page: schema.Page, d: schema.Density,
     user = prompts.expand_prompt(payload, d.reasons(), spec, req.topic, index, total)
     try:
         grown = engines.synthesize_page(req.engine, req.model, prompts.PAGE_SYSTEM_PROMPT,
-                                        user, api_base=req.api_base)
-    except engines.EngineError as exc:
-        warnings.append(f"page {index} expansion failed: {exc}")
+                                        user, api_base=req.api_base, num_ctx=req.num_ctx)
+    except Exception as exc:  # noqa: BLE001 — the original page is still usable
+        warnings.append(f"page {index} expansion failed "
+                        f"({exc.__class__.__name__}: {exc})")
         return page
     # The expansion is only an improvement if it actually added substance.
     if len(grown.blocks) >= len(page.blocks) and grown.word_count() >= page.word_count():
@@ -202,14 +208,15 @@ def _synthesize_single(req: BuildRequest, sources: list[dict], source_text: str,
     system = prompts.SYSTEM_PROMPT
     user = prompts.build_user_prompt(req.topic, req.pages, req.personas,
                                      source_text, sources)
-    primer = engines.synthesize(req.engine, req.model, system, user, api_base=req.api_base)
+    primer = engines.synthesize(req.engine, req.model, system, user,
+                                api_base=req.api_base, num_ctx=req.num_ctx)
     problems = schema.validate_budget(primer)
     if problems:
         log("page budget violated; asking the model to repair…")
         try:
             primer = engines.synthesize(req.engine, req.model, system,
                                         user + "\n\n" + prompts.repair_prompt(problems),
-                                        api_base=req.api_base)
+                                        api_base=req.api_base, num_ctx=req.num_ctx)
         except engines.EngineError as exc:
             warnings.append(f"repair pass failed ({exc}); compacting deterministically.")
     sparse = schema.validate_density(primer, req.min_sections)
