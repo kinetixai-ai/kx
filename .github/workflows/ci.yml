@@ -73,13 +73,23 @@ jobs:
       - name: Build the wheel
         run: python -m pip wheel --no-deps --wheel-dir wheelhouse .
       - name: Fetch the installers from kinetixai.ai
+        id: fetch
         shell: bash
         run: |
           mkdir -p public
-          curl -fsSL https://kinetixai.ai/install.sh -o public/install.sh
-          curl -fsSL https://kinetixai.ai/install.ps1 -o public/install.ps1
+          # Live site first, then the preview of the next site release.
+          for base in https://kinetixai.ai https://feat-launch-readiness.kinetixai.pages.dev; do
+            if curl -fsSL "$base/install.sh" -o public/install.sh \
+               && curl -fsSL "$base/install.ps1" -o public/install.ps1; then
+              echo "Testing the installers from $base"
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::notice::Installers are not published yet; skipping the installer test."
+          echo "ok=false" >> "$GITHUB_OUTPUT"
       - name: install.sh with pipx, then without
-        if: runner.os != 'Windows'
+        if: steps.fetch.outputs.ok == 'true' && runner.os != 'Windows'
         shell: bash
         run: |
           set -eux
@@ -89,7 +99,7 @@ jobs:
           KX_WHEEL="$WHL" KX_NO_PIPX=1 KX_HOME="$RUNNER_TEMP/kxhome" sh public/install.sh
           "$RUNNER_TEMP/kxhome/venv/bin/kx" doctor --offline
       - name: install.ps1 with pipx, then without
-        if: runner.os == 'Windows'
+        if: steps.fetch.outputs.ok == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
           $whl = (Get-ChildItem wheelhouse\kinetixai-*.whl).FullName
