@@ -59,6 +59,14 @@ kx rag ask "How does FlashAttention reduce HBM traffic?"
 kx mcp --config goose                # also: claude-desktop, cline, continue, openhands, open-webui, cursor
 kx mcp                               # run the server
 
+# Primers: topic or source -> styled PDF / PNG / PPTX / JSON  (pip install 'kinetixai[primers]')
+kx primers build --topic "GPU & CUDA: Kernel Fusion & Quantization" \
+  --persona student,professional --pages 8 --pdfs 1 --ppts 1 --images 8 --json-bundles 1 \
+  --engine local-vllm --model Qwen/Qwen2.5-14B-Instruct --verify-citations \
+  --out-dir ./dist/primers/gpu
+kx convert ./TriParseGPU_Deck.pptx --style trifleet-8page --pages 8 -o ./TriParseGPU_8p.pdf
+kx primers autobuild --manifest ./primers_catalog.yaml --parallel 4   # all 18 tracks
+
 # account (optional; only kx ask uses it)
 kx login                             # paste a token from https://kinetixai.ai/account/tokens/
 kx whoami
@@ -69,6 +77,35 @@ kx logout                            # revokes the token and forgets it
 Every command takes `--json`, placed after the command (`kx search "rope" --json`,
 not `kx --json search`): ASCII-safe JSON on stdout, errors on stderr, exit code 1
 on failure, 2 on bad usage.
+
+## Primers ("Story to Silicon")
+
+`kx primers build` researches a topic (federated arXiv + Semantic Scholar +
+OpenAlex), optionally ingests a source (`--source` takes a .pptx, .pdf, .md,
+a GitHub repo URL, or an arXiv id/DOI), synthesizes a page-by-page layout
+model with your chosen engine, and compiles it with a deterministic HTML/CSS
+A4 print engine (WeasyPrint by default, `KX_PDF_ENGINE=playwright` for
+headless Chromium). Outputs per run: editable self-contained HTML, vector
+PDF, 300 DPI PNG page cards, an editable .pptx with speaker notes, and a
+Paper Lab JSON bundle (visualization, architecture, mnemonic, cheatsheet and
+flashcards tabs, plus bibtex and rag_chunks you can feed straight into
+`kx rag`).
+
+Engines: `local-vllm` (any OpenAI-compatible endpoint; set `KX_VLLM_URL`),
+`ollama`, `openai`, `anthropic`, `gemini` — or `outline`, a no-LLM mode that
+produces clearly labelled draft scaffolding from the source text alone.
+Personas (`--persona`): student, phd, researcher, professor, professional,
+lab, ai-security — each adds its own callouts (interview traps, related-work
+tables, misconception radar, Three Honest Columns benchmarks, reproducibility
+blocks, threat matrices).
+
+Honesty guarantees: citations only ever come from fetched metadata, never
+from the model; `--verify-citations` re-resolves each one and drops failures;
+pages carry a 380–460-word budget with an automatic repair pass and
+deterministic compaction, so nothing overflows the 297mm page.
+
+`kx primers autobuild --manifest primers_catalog.yaml --parallel 4` builds
+the whole catalog; the repo ships a manifest with all 18 KinetixAI tracks.
 
 ## Local RAG and privacy
 

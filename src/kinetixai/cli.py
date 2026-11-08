@@ -35,9 +35,12 @@ app = typer.Typer(
 config_app = typer.Typer(**TYPER_SAFE, no_args_is_help=True, help="View or change settings.")
 library_app = typer.Typer(**TYPER_SAFE, no_args_is_help=True, help="Your local paper library (stored on this machine).")
 rag_app = typer.Typer(**TYPER_SAFE, no_args_is_help=True, help="Private question answering over your library, on this machine.")
+primers_app = typer.Typer(**TYPER_SAFE, no_args_is_help=True,
+                          help='"Story to Silicon" Primers: generate styled PDF/PPTX/PNG/JSON bundles.')
 app.add_typer(config_app, name="config")
 app.add_typer(library_app, name="library")
 app.add_typer(rag_app, name="rag")
+app.add_typer(primers_app, name="primers")
 
 JSON = typer.Option(False, "--json", help="Machine-readable JSON on stdout.")
 UA = net.UA  # kept for backwards compatibility
@@ -591,6 +594,168 @@ def rag_status(json_out: bool = JSON) -> None:
                              + (f", embeddings {data['embed_model']}" if data["embed_model"] else ", BM25 only"))
         for p in data["paths"]:
             output.console.print(f"  [dim]{p}[/dim]")
+
+
+# ── Primers ───────────────────────────────────────────────────────────────
+
+def _primer_deps():
+    """Import the primers package lazily with one clear install hint."""
+    try:
+        from .primers import builder as primers_builder  # noqa: F401
+        from .primers import catalog as primers_catalog  # noqa: F401
+        from .primers import engines as primers_engines  # noqa: F401
+        from .primers import ingest as primers_ingest    # noqa: F401
+        from .primers import renderer as primers_renderer  # noqa: F401
+        return primers_builder, primers_catalog, primers_engines, primers_ingest, primers_renderer
+    except ImportError as exc:
+        output.error(f"primers needs extra packages ({exc.name}). "
+                     "Install them with: pip install 'kinetixai[primers]'")
+        raise typer.Exit(code=1)
+
+
+def _primer_errors():
+    from .primers import builder as b, catalog as c, engines as e, ingest as i, renderer as r
+    from .primers.exporters.images import ImageExportError
+    from .primers.exporters.pptx import PptxExportError
+    return (e.EngineError, i.IngestError, r.RenderError, c.ManifestError,
+            ImageExportError, PptxExportError)
+
+
+def _run_build(req, json_out: bool):
+    from .primers import builder as primers_builder
+    log = (lambda s: None) if json_out else (lambda s: output.err.print(f"[dim]{s}[/dim]"))
+    try:
+        res = primers_builder.build(req, log=log)
+    except _primer_errors() as exc:
+        output.error(str(exc))
+        raise typer.Exit(code=1)
+    for w in res.warnings:
+        output.warn(w)
+    if json_out:
+        output.emit_json(res.to_dict())
+        return
+    d = res.to_dict()
+    output.console.print(f"[green]built[/green] [bold]{d['title']}[/bold] ({d['pages']} pages, "
+                         f"{d['citations']} verified citations)")
+    for label, items in (("pdf", d["pdfs"]), ("png", d["images"]),
+                         ("pptx", d["ppts"]), ("json", d["json"])):
+        for p in items:
+            output.console.print(f"  {label:>4}  {p}")
+    if d["html"]:
+        output.console.print(f"  html  {d['html']}  [dim](editable)[/dim]")
+
+
+@primers_app.command("build")
+def primers_build(
+    topic: str = typer.Option(..., "--topic", "-t", help="Topic, e.g. 'GPU & CUDA: Kernel Fusion'."),
+    source: Optional[str] = typer.Option(None, "--source", "-s",
+                                         help="Optional .pptx/.pdf/.md file, GitHub URL, or arXiv id/DOI."),
+    category: str = typer.Option("", "--category", help="Catalog category slug, e.g. gpu, rag, security."),
+    persona: str = typer.Option("student", "--persona",
+                                help="Comma list: student,phd,researcher,professor,professional,lab,ai-security."),
+    pages: int = typer.Option(8, "--pages", min=1, max=42, help="Exact page count per PDF."),
+    pdfs: int = typer.Option(1, "--pdfs", min=0, help="Styled PDF variants to generate."),
+    ppts: int = typer.Option(0, "--ppts", min=0, help="Editable .pptx decks (with speaker notes)."),
+    images: int = typer.Option(0, "--images", min=0, help="300 DPI PNG page cards to export."),
+    json_n: int = typer.Option(0, "--json-bundles", min=0,
+                               help="Paper Lab JSON bundles (tabs + bibtex + rag_chunks)."),
+    watermark: str = typer.Option("Rohit Patel | Narmadya Innovations", "--watermark",
+                                  help="Running header/footer watermark."),
+    author: str = typer.Option("Rohit Patel", "--author"),
+    engine: str = typer.Option("outline", "--engine",
+                               help="outline (no LLM) | local-vllm | ollama | openai | anthropic | gemini"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model name for the chosen engine."),
+    verify_citations: bool = typer.Option(False, "--verify-citations",
+                                          help="Re-resolve every citation; drop any that fail."),
+    out_dir: Path = typer.Option(Path("./dist/primers"), "--out-dir", "-o"),
+    json_out: bool = JSON,
+) -> None:
+    """Research, synthesize and compile a 'Story to Silicon' Primer bundle."""
+    primers_builder, _, primers_engines, _, _ = _primer_deps()
+    if engine not in primers_engines.ENGINES:
+        output.error(f"--engine must be one of: {', '.join(primers_engines.ENGINES)}")
+        raise typer.Exit(code=2)
+    req = primers_builder.BuildRequest(
+        topic=topic, source=source, category=category,
+        personas=[p.strip() for p in persona.split(",") if p.strip()],
+        pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
+        watermark=watermark, author=author, engine=engine, model=model,
+        verify_citations=verify_citations, out_dir=out_dir)
+    _run_build(req, json_out)
+
+
+@primers_app.command("autobuild")
+def primers_autobuild(
+    manifest: Path = typer.Option(Path("./primers_catalog.yaml"), "--manifest",
+                                  help="YAML manifest of catalog tracks."),
+    parallel: int = typer.Option(2, "--parallel", min=1, max=8, help="Concurrent builds."),
+    json_out: bool = JSON,
+) -> None:
+    """Batch-build every Primer track in a YAML manifest."""
+    _, primers_catalog, *_ = _primer_deps()
+    if not manifest.is_file():
+        output.error(f"manifest not found: {manifest}")
+        raise typer.Exit(code=2)
+    log = (lambda s: None) if json_out else (lambda s: output.err.print(s))
+    try:
+        results = primers_catalog.autobuild(manifest, parallel=parallel, log=log)
+    except _primer_errors() as exc:
+        output.error(str(exc))
+        raise typer.Exit(code=1)
+    ok = sum(1 for r in results if r["ok"])
+    if json_out:
+        output.emit_json({"built": ok, "failed": len(results) - ok, "tracks": results})
+    else:
+        output.console.print(f"[green]{ok}[/green]/{len(results)} tracks built.")
+    if ok < len(results):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def convert(
+    source: str = typer.Argument(..., metavar="SOURCE",
+                                 help="A .pptx/.pdf/.md file, GitHub URL, or arXiv id/DOI."),
+    style: str = typer.Option("trifleet-8page", "--style", help="Output style preset."),
+    topic: Optional[str] = typer.Option(None, "--topic", "-t",
+                                        help="Title override (default: derived from the source)."),
+    persona: str = typer.Option("professional", "--persona"),
+    pages: int = typer.Option(8, "--pages", min=1, max=42),
+    pdfs: int = typer.Option(1, "--pdfs", min=0),
+    ppts: int = typer.Option(0, "--ppts", min=0),
+    images: int = typer.Option(0, "--images", min=0),
+    json_n: int = typer.Option(0, "--json-bundles", min=0),
+    watermark: str = typer.Option("Rohit Patel", "--watermark"),
+    author: str = typer.Option("Rohit Patel", "--author"),
+    engine: str = typer.Option("outline", "--engine",
+                               help="outline (no LLM) | local-vllm | ollama | openai | anthropic | gemini"),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+    out: Optional[Path] = typer.Option(None, "--out", "-o",
+                                       help="Output PDF path (its folder receives the other artifacts)."),
+    json_out: bool = JSON,
+) -> None:
+    """Convert an existing deck, paper or repo into the TriFleet 8-page format."""
+    primers_builder, _, primers_engines, _, _ = _primer_deps()
+    if engine not in primers_engines.ENGINES:
+        output.error(f"--engine must be one of: {', '.join(primers_engines.ENGINES)}")
+        raise typer.Exit(code=2)
+    name = topic or Path(source).stem.replace("_", " ").replace("-", " ").strip() or source
+    out_dir = out.parent if out else Path("./dist/convert")
+    req = primers_builder.BuildRequest(
+        topic=name, source=source, personas=[p.strip() for p in persona.split(",") if p.strip()],
+        pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
+        watermark=watermark, author=author, engine=engine, model=model,
+        out_dir=out_dir, style=style)
+    from .primers import builder as pb
+    if out:  # honor the exact --out filename
+        orig_slug = pb.slugify(name)
+        _run_build(req, json_out)
+        built = out_dir / f"{orig_slug}.pdf"
+        if built.is_file() and built != out:
+            os.replace(built, out)
+            if not json_out:
+                output.console.print(f"[green]saved[/green] {out}")
+    else:
+        _run_build(req, json_out)
 
 
 # ── MCP ───────────────────────────────────────────────────────────────────

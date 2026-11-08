@@ -1,0 +1,70 @@
+# KinetixAI Primer catalog — all 18 tracks.
+# Run: kx primers autobuild --manifest ./primers_catalog.yaml --parallel 4
+#
+# defaults apply to every track; any track key overrides them.
+# engine: outline (no LLM, draft scaffolding) | local-vllm | ollama | openai | anthropic | gemini
+
+defaults:
+  pages: 8
+  pdfs: 1
+  ppts: 1
+  images: 8
+  jsons: 1
+  watermark: "Rohit Patel | Narmadya Innovations"
+  author: "Rohit Patel"
+  engine: local-vllm
+  model: "Qwen/Qwen2.5-14B-Instruct"
+  verify_citations: true
+  personas: [student, professional]
+  out_dir: ./dist/primers
+
+tracks:
+  - topic: "Attention & Transformers"
+    category: core-ai
+    personas: [student, phd, professor]
+  - topic: "Types of RAG"
+    category: rag
+    personas: [student, professional, ai-security]
+  - topic: "Agentic AI"
+    category: agentic
+    personas: [student, professional, ai-security]
+  - topic: "Diffusion Models"
+    category: generative
+    personas: [student, phd]
+  - topic: "Core AI"
+    category: core-ai
+  - topic: "Classical AI"
+    category: classical
+  - topic: "Classical ML"
+    category: classical
+    personas: [student, professor]
+  - topic: "Neural Network Training"
+    category: deep-learning
+    personas: [student, lab]
+  - topic: "Maths for AI"
+    category: maths
+    personas: [student, professor]
+  - topic: "Optimization & Decision Science"
+    category: ods
+  - topic: "Advanced DSA"
+    category: dsa
+    personas: [student]
+  - topic: "Computer Vision"
+    category: vision
+  - topic: "NLP & NLU"
+    category: nlp
+  - topic: "Research RAG"
+    category: rag
+    personas: [researcher, lab]
+  - topic: "Agent Factory"
+    category: agentic
+    personas: [professional, lab]
+  - topic: "GPU & CUDA"
+    category: gpu
+    personas: [student, professional, lab]
+  - topic: "GPU Research"
+    category: gpu
+    personas: [phd, researcher]
+  - topic: "AI Security & Guardrails"
+    category: security
+    personas: [ai-security, professional]

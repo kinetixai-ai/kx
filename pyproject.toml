@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kinetixai"
-version = "0.2.1"
+version = "0.3.0"
 description = "kx: papers to code, models and datasets, a local paper library, private RAG over your PDFs, and an MCP server for open-source agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,12 +54,25 @@ rag = ["pypdf>=4"]
 mcp = ["mcp>=1.25,<3"]
 # Store the API token in the OS keychain instead of a 0600 file.
 keyring = ["keyring>=24"]
-all = ["pypdf>=4", "mcp>=1.25,<3", "keyring>=24"]
-dev = ["pytest>=8", "pypdf>=4", "mcp>=1.25,<3"]
+# `kx primers build` / `kx convert`: HTML->PDF rendering, PNG/PPTX/JSON export.
+primers = [
+  "jinja2>=3.1",
+  "pyyaml>=6",
+  "python-pptx>=0.6.23",
+  "pypdf>=4",
+  "pypdfium2>=4",
+  "pillow>=10",
+  "weasyprint>=60",
+]
+all = ["pypdf>=4", "mcp>=1.25,<3", "keyring>=24", "jinja2>=3.1", "pyyaml>=6", "python-pptx>=0.6.23", "pypdfium2>=4", "pillow>=10", "weasyprint>=60"]
+dev = ["pytest>=8", "pypdf>=4", "mcp>=1.25,<3", "jinja2>=3.1", "pyyaml>=6", "python-pptx>=0.6.23", "pypdfium2>=4", "pillow>=10", "weasyprint>=60"]
 build = ["pyinstaller>=6.6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"kinetixai.primers" = ["templates/*.j2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
