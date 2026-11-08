@@ -52,3 +52,24 @@ def test_config_roundtrip(tmp_path, monkeypatch):
     assert runner.invoke(cli.app, ["config", "set", "limit", "25"]).exit_code == 0
     res = runner.invoke(cli.app, ["config", "get", "limit"])
     assert res.stdout.strip() == "25"
+
+
+def test_version_matches_pyproject():
+    """__version__ must track pyproject.toml.
+
+    The release workflow checks this too, but only at tag time; this test
+    catches the drift on the branch that caused it.
+    """
+    import tomllib
+    from pathlib import Path
+
+    from kinetixai import __version__
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():  # installed without the source tree
+        return
+    declared = tomllib.load(pyproject.open("rb"))["project"]["version"]
+    assert __version__ == declared, (
+        f"__init__.py says {__version__}, pyproject.toml says {declared}"
+    )
