@@ -269,18 +269,23 @@ def write_report(path: Path, results: list[dict], skipped: list[dict],
 
 # ── main ──────────────────────────────────────────────────────────────────
 
-def served_models(engine: str) -> list[str]:
-    r = subprocess.run(["kx", "primers", "models", engine, "--json"],
+def callable_models(engine: str) -> tuple[list[str], list[dict]]:
+    """Models that answer a real request — not merely listed.
+
+    A hosted /models list reports entitlement, not permission: Groq lists a
+    model and then returns 403 model_permission_blocked_project for it, so
+    clearing a batch run on the list alone fails all 24 tracks.
+    """
+    r = subprocess.run(["kx", "primers", "models", engine, "--verify", "--json"],
                        capture_output=True, text=True)
-    if r.returncode != 0:
-        return []
     try:
-        return json.loads(r.stdout).get("models") or []
+        data = json.loads(r.stdout)
     except json.JSONDecodeError:
-        return []
+        return [], []
+    return (data.get("callable") or []), (data.get("checks") or [])
 
 
-def preflight(engine: str) -> None:
+def preflight(engine: str) -> list[str]:
     if not shutil.which("kx"):
         sys.exit("kx is not on PATH. Run:  pip install -e '.[primers]'")
     probe = subprocess.run(["kx", "primers", "build", "--help"],
@@ -288,18 +293,19 @@ def preflight(engine: str) -> None:
     if "--slug" not in probe.stdout:
         sys.exit("this kx is too old for --slug. Run:  git pull && pip install -e '.[primers]'")
     if engine in ("outline", "mcp"):
-        return
-    r = subprocess.run(["kx", "primers", "models", engine, "--json"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        sys.exit(f"engine {engine!r} is not ready:\n{(r.stderr or r.stdout).strip()}")
-    try:
-        served = json.loads(r.stdout).get("models") or []
-    except json.JSONDecodeError:
-        served = []
-    if not served:
-        sys.exit(f"engine {engine!r} serves no chat model. Check the API key.")
-    print(f"engine {engine}: {len(served)} model(s), using {served[0]}")
+        return []
+    usable, checks = callable_models(engine)
+    for c in checks:
+        print(f"  {'ok  ' if c['callable'] else 'FAIL'} {c['model']:28} {c['detail']}")
+    if not usable:
+        print(f"\nengine {engine!r}: no model can be called with this key.",
+              file=sys.stderr)
+        if any("blocked" in c["detail"] for c in checks):
+            print("Models are listed but blocked at the project level. Enable them "
+                  "in the provider's project settings, then re-run.", file=sys.stderr)
+        sys.exit(1)
+    print(f"engine {engine}: {len(usable)} callable model(s), using {usable[0]}")
+    return usable
 
 
 def main() -> int:
@@ -365,10 +371,9 @@ def main() -> int:
     if not todo:
         print("nothing to build.")
     else:
-        preflight(engine)
-        served = served_models(engine)
-        ladder = [args.model] if args.model else ([served[0]] if served else [None])
-        for m in served:
+        usable = preflight(engine)
+        ladder = [args.model] if args.model else ([usable[0]] if usable else [None])
+        for m in usable:
             if m not in ladder and len(ladder) < 2:
                 ladder.append(m)
         print("model ladder: " + " → ".join(str(m or "auto") for m in ladder))

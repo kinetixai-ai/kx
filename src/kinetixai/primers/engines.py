@@ -410,3 +410,41 @@ def outline(topic: str, pages: int, personas: list[str],
             Page(title=f"{topic} — {spec.role}", subtitle="Draft outline",
                  takeaway="Draft outline page — verify before publishing.", blocks=blocks))
     return primer
+
+
+def verify_model(engine: str, model: str) -> tuple[bool, str]:
+    """Can this model actually be called, right now, with this key?
+
+    A hosted /models list reports what the account is entitled to, not what
+    the project permits: Groq returns 403 model_permission_blocked_project
+    for a model it happily lists. Only a real request settles it, so this
+    sends the smallest possible one.
+    """
+    try:
+        complete(engine, model, "Reply with the single word OK.", "OK",
+                 max_tokens=8)
+    except EngineError as exc:
+        text = str(exc)
+        if "model_permission_blocked" in text or "blocked at the project level" in text:
+            return False, "blocked at project level"
+        if "HTTP 404" in text and "does not exist" in text:
+            return False, "not available to this key"
+        if "HTTP 429" in text or "rate limit" in text.lower():
+            return False, "rate limited"
+        if "HTTP 401" in text or "HTTP 403" in text:
+            return False, "not permitted"
+        return False, text.splitlines()[0][:160]
+    except Exception as exc:  # noqa: BLE001 — verification must not raise
+        return False, f"{exc.__class__.__name__}: {exc}"[:160]
+    return True, "ok"
+
+
+def first_callable(engine: str, candidates: list[str]) -> tuple[str | None, list[dict]]:
+    """The first model that answers, plus why each earlier one did not."""
+    report: list[dict] = []
+    for model in candidates:
+        ok, why = verify_model(engine, model)
+        report.append({"model": model, "callable": ok, "detail": why})
+        if ok:
+            return model, report
+    return None, report

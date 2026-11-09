@@ -823,12 +823,17 @@ def primers_engines_cmd(
 @primers_app.command("models")
 def primers_models_cmd(
     engine: str = typer.Argument(..., help="Engine name, e.g. groq, gemini, ollama."),
+    verify: bool = typer.Option(False, "--verify",
+                                help="Send a tiny request to each model to see which "
+                                     "can actually be called. A listed model can still "
+                                     "be blocked at the project level."),
     json_out: bool = JSON,
 ) -> None:
     """List the chat models an engine's endpoint actually serves.
 
     A built-in default can go stale and a hosted key is only entitled to
     part of the catalogue, so this is the list --model can be set from.
+    Add --verify to find out which of them the project actually permits.
     """
     _primer_deps()
     from .primers import providers as pv
@@ -843,18 +848,48 @@ def primers_models_cmd(
         output.error(f"set {p.keys[0]} first, then re-run.")
         raise typer.Exit(2)
     served = pv.rank_models(pv.chat_models(p, timeout=10.0))
-    if json_out:
-        output.emit_json({"engine": p.name, "models": served,
-                          "would_use": served[0] if served else None})
-        return
-    if not served:
+    if not served and not json_out:
         output.error(f"{p.label} returned no chat models. "
                      "Check the key, or the endpoint if it is self-hosted.")
         raise typer.Exit(1)
+
+    checks: list[dict] = []
+    usable = served
+    if verify and served:
+        from .primers import engines as primers_engines
+        if not json_out:
+            output.err.print(f"[dim]checking {len(served)} model(s)…[/dim]")
+        # Check all of them, not just up to the first that works: the point
+        # of --verify is to see the whole picture before a long batch run.
+        for m in served:
+            ok, why = primers_engines.verify_model(p.name, m)
+            checks.append({"model": m, "callable": ok, "detail": why})
+        usable = [c["model"] for c in checks if c["callable"]]
+
+    if json_out:
+        output.emit_json({"engine": p.name, "models": served,
+                          "verified": verify, "checks": checks,
+                          "callable": usable if verify else None,
+                          "would_use": (usable[0] if usable else None)})
+        return
+
     output.console.print(f"[bold]{p.label}[/bold] serves {len(served)} chat model(s):")
+    by_model = {c["model"]: c for c in checks}
     for m in served:
-        output.console.print(f"  {m}")
-    output.console.print(f"\n[dim]without --model, kx would use:[/dim] [bold]{served[0]}[/bold]")
+        c = by_model.get(m)
+        if c is None:
+            output.console.print(f"  {m}")
+        elif c["callable"]:
+            output.console.print(f"  [green]✓[/green] {m}")
+        else:
+            output.console.print(f"  [red]✗[/red] {m}  [dim]{c['detail']}[/dim]")
+    if verify and not usable:
+        output.error("none of them can be called with this key. "
+                     "If they show as blocked, enable them in the provider's "
+                     "project settings, then re-run.")
+        raise typer.Exit(1)
+    output.console.print(
+        f"\n[dim]without --model, kx would use:[/dim] [bold]{usable[0]}[/bold]")
 
 
 @primers_app.command("autobuild")

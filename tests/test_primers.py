@@ -1540,3 +1540,43 @@ def test_ship_error_report_names_the_cause_not_the_hint():
     assert "429" in got and "Rate limit reached" in got
     assert "Try `kx" not in got
     assert ship.first_real_error("") == "failed with no error output"
+
+
+def test_verify_model_names_a_project_level_block(monkeypatch):
+    """/models lists the model; the project forbids it. Only a call reveals it."""
+    import kinetixai.primers.engines as e
+    blocked = ('LLM endpoint https://api.groq.com/openai/v1: HTTP 403: '
+               '{"error":{"message":"The model `openai/gpt-oss-120b` is blocked at '
+               'the project level.","code":"model_permission_blocked_project"}}')
+
+    def fake(*a, **kw):
+        raise e.EngineError(blocked)
+
+    monkeypatch.setattr(e, "complete", fake)
+    ok, why = e.verify_model("groq", "openai/gpt-oss-120b")
+    assert ok is False and why == "blocked at project level"
+
+
+def test_first_callable_skips_the_blocked_model(monkeypatch):
+    import kinetixai.primers.engines as e
+
+    def fake(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
+        if model == "openai/gpt-oss-120b":
+            raise e.EngineError("HTTP 403: model_permission_blocked_project")
+        return "OK"
+
+    monkeypatch.setattr(e, "complete", fake)
+    model, report = e.first_callable("groq", ["openai/gpt-oss-120b", "qwen/qwen3.8-27b"])
+    assert model == "qwen/qwen3.8-27b"
+    assert report[0]["callable"] is False and report[1]["callable"] is True
+
+
+def test_verify_model_never_raises(monkeypatch):
+    import kinetixai.primers.engines as e
+
+    def boom(*a, **kw):
+        raise RuntimeError("socket exploded")
+
+    monkeypatch.setattr(e, "complete", boom)
+    ok, why = e.verify_model("groq", "m")
+    assert ok is False and "socket exploded" in why
