@@ -1,14 +1,13 @@
-# KinetixAI Primer catalog — the 24 primers that still show "Coming soon"
-# on https://kinetixai.ai/primers/ (trifleetrca and gpu-cuda-kernel-fusion
-# are already live, so they are not rebuilt here).
+# KinetixAI Primer catalog — the 24 primers still showing "Coming soon"
+# on https://kinetixai.ai/primers/.
 #
-# Run:  kx primers autobuild --manifest ./primers_catalog.yaml --parallel 6
+# Run:  python3 scripts/ship_primers.py
 #
-# Each track's `slug` sets the output filename AND folder, so the result lands
-# at dist/primers/<slug>/<slug>.pdf and drops straight onto /primers/<slug>/.
-# Check the slugs against the real site routes before uploading — the two live
-# pages use short slugs (trifleetrca, gpu-cuda-kernel-fusion) and the ones
-# below follow that shape, but only the site knows for certain.
+# slug and category are COPIED FROM the website's app/content.py PRIMERS
+# items, not invented here. scripts/add_primer.py in the website repo
+# validates the category against PRIMERS["categories"] and the slug against
+# the coming-soon list, so a mismatch here fails at upload time, after the
+# tokens have been spent.
 
 defaults:
   pages: 8
@@ -19,10 +18,8 @@ defaults:
   watermark: "Rohit Patel | Narmadya Innovations"
   author: "Rohit Patel"
   engine: groq
-  # No model pinned on purpose. Groq rotates ids AND blocks models per
-  # project, so any pin here eventually 403s or 404s on every page. Left
-  # unset, kx resolves whatever the key can actually call. To pin one,
-  # check it first with: kx primers models groq --verify
+  # No model pinned: Groq rotates ids and blocks models per project, so any
+  # pin eventually 403s or 404s. Check with: kx primers models groq --verify
   mode: iterative
   min_sections: 5
   verify_citations: true
@@ -32,40 +29,46 @@ defaults:
   copy_to: "/Users/rohitpatel/My_Companies_Data/KinetixAI-AI/kx-cli/notes/"
 
 tracks:
-  # ---------- Core ----------
+  - topic: "Attention & Transformers"
+    slug: attention-transformers
+    category: dl
+    personas: [student, phd, professor]
+
+  - topic: "Types of RAG: GraphRAG, Self-RAG & Corrective RAG"
+    slug: rag-graphrag
+    category: rag-types
+    personas: [student, professional, ai-security]
+
+  - topic: "Agentic AI"
+    slug: agentic-ai
+    category: agentic
+    personas: [student, professional, ai-security]
+
+  - topic: "Diffusion Models"
+    slug: diffusion-models
+    category: dl
+    personas: [student, phd]
+
   - topic: "Core AI: The Foundations Map"
-    slug: core-ai
-    category: core-ai
+    slug: core-foundations
+    category: core
     personas: [student, professor]
 
   - topic: "Classical AI: Search, Logic & Planning"
     slug: classical-ai
-    category: classical
+    category: ai
     personas: [student, professor]
 
-  # ---------- Machine Learning ----------
   - topic: "Classical ML: Linear Models to Gradient Boosting"
     slug: classical-ml
-    category: classical
+    category: ml
     personas: [student, professor]
 
-  # ---------- Deep Learning ----------
-  - topic: "Attention & Transformers"
-    slug: attention-transformers
-    category: deep-learning
-    personas: [student, phd, professor]
-
   - topic: "Neural Network Training: Optimizers & Scaling Laws"
-    slug: neural-network-training
-    category: deep-learning
+    slug: training-at-scale
+    category: dl
     personas: [student, lab]
 
-  - topic: "Diffusion Models"
-    slug: diffusion-models
-    category: generative
-    personas: [student, phd]
-
-  # ---------- Maths & Optimization ----------
   - topic: "Maths for AI: Linear Algebra, Probability & Calculus"
     slug: maths-for-ai
     category: maths
@@ -76,16 +79,14 @@ tracks:
     category: ods
     personas: [student, professional]
 
-  # ---------- Advanced DSA ----------
   - topic: "Advanced DSA for ML & Systems Interviews"
     slug: advanced-dsa
     category: dsa
     personas: [student, professional]
 
-  # ---------- Vision & Language ----------
   - topic: "Computer Vision: Convolutions to Vision Transformers"
     slug: computer-vision
-    category: vision
+    category: cv
     personas: [student, phd]
 
   - topic: "NLP & NLU: Tokenizers, Embeddings & Language Understanding"
@@ -93,79 +94,59 @@ tracks:
     category: nlp
     personas: [student, professional]
 
-  # ---------- RAG ----------
   - topic: "Research RAG: Building a System That Actually Grounds Answers"
-    slug: research-rag
+    slug: research-rag-build
     category: rag
     personas: [researcher, lab]
 
-  - topic: "Types of RAG: GraphRAG, Self-RAG & Corrective RAG"
-    slug: types-of-rag
-    category: rag
-    personas: [student, professional, ai-security]
-
-  # ---------- Agents ----------
-  - topic: "Agentic AI"
-    slug: agentic-ai
-    category: agentic
-    personas: [student, professional, ai-security]
-
   - topic: "Agent Factory: Multi-Agent Systems That Ship"
     slug: agent-factory
-    category: agentic
+    category: agent-factory
     personas: [professional, lab]
 
-  # ---------- GPU / CUDA ----------
   - topic: "GPU & CUDA: How Your Model Actually Runs on Silicon"
     slug: gpu-cuda
     category: gpu
     personas: [student, professional, lab]
 
   - topic: "GPU Research: Quantization, Kernel Fusion & Inference"
-    slug: gpu-research
+    slug: gpu-inference-research
     category: gpu
     personas: [phd, researcher]
 
-  # ---------- Ops & Systems ----------
   - topic: "MLOps & DLOps: Shipping Models to Production"
     slug: mlops-dlops
     category: mlops
     personas: [professional, lab]
 
   - topic: "Advanced Systems for AI: Distributed Training & Serving"
-    slug: advanced-systems
+    slug: advanced-systems-ai
     category: systems
     personas: [professional, lab]
 
-  # ---------- Security ----------
   - topic: "AI Security: Prompt Injection, Jailbreaks & Red-Teaming"
     slug: ai-security
-    category: security
+    category: ai-security
     personas: [ai-security, professional]
 
-  # ---------- Paper Notes ----------
-  # These two are grounded in the real papers, so the primer quotes the
-  # actual architecture rather than the model's memory of it.
   - topic: "Paper Notes: Attention Is All You Need"
     slug: paper-attention-is-all-you-need
-    category: papers
+    category: research-papers
     source: "arxiv:1706.03762"
     personas: [student, phd, researcher]
 
   - topic: "Paper Notes: FlashAttention"
     slug: paper-flashattention
-    category: papers
+    category: research-papers
     source: "arxiv:2205.14135"
     personas: [phd, researcher, lab]
 
-  # Your own preprints. They build from the topic plus verified citations as
-  # written; add `source: "arxiv:<id>"` to ground each one in its own PDF.
   - topic: "Paper Notes: TriCalRAG"
     slug: paper-tricalrag
-    category: papers
+    category: research-papers
     personas: [researcher, phd, lab]
 
   - topic: "Paper Notes: TriShieldRAG"
     slug: paper-trishieldrag
-    category: papers
+    category: research-papers
     personas: [researcher, ai-security, lab]
