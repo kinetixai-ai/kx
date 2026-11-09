@@ -1627,6 +1627,7 @@ def test_ship_does_not_probe_a_local_server(monkeypatch):
 
 def test_ship_streams_page_progress(tmp_path):
     """A silent terminal for 20 minutes is indistinguishable from a hang."""
+    import sys
     ship = _ship()
     script = tmp_path / "fake.py"
     script.write_text(
