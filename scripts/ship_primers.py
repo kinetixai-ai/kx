@@ -138,6 +138,36 @@ def build_cmd(track: dict, out_root: Path, model: str | None) -> list[str]:
     return cmd
 
 
+_PRINT_LOCK = __import__("threading").Lock()
+
+
+def say(line: str) -> None:
+    with _PRINT_LOCK:
+        print(line, flush=True)
+
+
+# Lines worth surfacing live. A local model takes minutes per page, and a
+# silent terminal for half an hour is indistinguishable from a hang.
+_PROGRESS = ("page ", "expanding", "rendering", "compiling", "exporting",
+             "ingesting", "searching", "model:", "engine:", "copying")
+
+
+def stream(cmd: list[str], slug: str) -> tuple[subprocess.CompletedProcess, str]:
+    """Run a build, echoing its progress as it happens, and keep the output."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1)
+    collected: list[str] = []
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        collected.append(raw)
+        line = raw.strip()
+        if line and any(line.startswith(k) or k in line[:14] for k in _PROGRESS):
+            say(f"    {slug:30} {line[:90]}")
+    proc.wait()
+    return (subprocess.CompletedProcess(cmd, proc.returncode, "", ""),
+            "".join(collected))
+
+
 def first_real_error(text: str) -> str:
     """The line that says what went wrong, not the trailing 'try this' hint.
 
@@ -170,8 +200,7 @@ def run_one(track: dict, out_root: Path, models: list[str | None],
     chunks: list[str] = []
     for model in models:
         cmd = build_cmd(track, out_root, model)
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        output = (proc.stdout or "") + (proc.stderr or "")
+        proc, output = stream(cmd, slug)
         chunks.append(f"$ {' '.join(cmd)}\n\n{output}\n")
         log_path.write_text("\n".join(chunks), encoding="utf-8")
         ok, why = is_finished(track, out_root)
@@ -428,8 +457,8 @@ def main() -> int:
                 r = fut.result()
                 done += 1
                 mark = "ok  " if r["ok"] else "FAIL"
-                print(f"[{done}/{len(todo)}] {mark} {r['slug']:34} "
-                      f"{r['seconds']}s  {r['detail'][:110]}")
+                say(f"[{done}/{len(todo)}] {mark} {r['slug']:34} "
+                    f"{r['seconds']}s  {r['detail'][:110]}")
                 results.append(r)
                 if (not aborted and len(results) >= give_up_after
                         and not any(x["ok"] for x in results)):

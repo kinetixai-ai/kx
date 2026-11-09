@@ -1623,3 +1623,17 @@ def test_ship_does_not_probe_a_local_server(monkeypatch):
     monkeypatch.setattr(ship.shutil, "which", lambda n: "/usr/local/bin/kx")
     assert ship.preflight("ollama") == ["qwen3.6-32k:latest"]
     assert not any("--verify" in c for c in seen)
+
+
+def test_ship_streams_page_progress(tmp_path):
+    """A silent terminal for 20 minutes is indistinguishable from a hang."""
+    ship = _ship()
+    script = tmp_path / "fake.py"
+    script.write_text(
+        "import sys\n"
+        "for line in ['ingesting source material…', 'page 1/8 (overview)…',\n"
+        "             'noise that is not progress', 'rendering HTML…']:\n"
+        "    print(line, flush=True)\n", encoding="utf-8")
+    proc, out = ship.stream([sys.executable, str(script)], "slug")
+    assert proc.returncode == 0
+    assert "page 1/8" in out and "rendering HTML" in out
