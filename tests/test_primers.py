@@ -1490,9 +1490,12 @@ def test_ship_build_cmd_carries_watermark_persona_and_slug():
     ship = _ship()
     _, tracks = ship.load_catalog()
     track = next(t for t in tracks if t["slug"] == "gpu-cuda")
+    defaults, _ = ship.load_catalog()
     cmd = ship.build_cmd(track, Path("/tmp/out"), "openai/gpt-oss-120b")
     assert "--slug" in cmd and cmd[cmd.index("--slug") + 1] == "gpu-cuda"
-    assert cmd[cmd.index("--watermark") + 1] == "Rohit Patel | Narmadya Innovations"
+    # Whatever the catalog says, not a literal: the byline is a brand choice.
+    assert cmd[cmd.index("--watermark") + 1] == defaults["watermark"]
+    assert "NARMADYA INNOVATIONS" in cmd[cmd.index("--watermark") + 1]
     assert cmd[cmd.index("--model") + 1] == "openai/gpt-oss-120b"
     assert cmd[cmd.index("--out-dir") + 1].endswith("gpu-cuda")
     assert "," in cmd[cmd.index("--persona") + 1]
