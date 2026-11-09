@@ -800,7 +800,10 @@ def convert(
     num_ctx: Optional[int] = typer.Option(None, "--num-ctx", min=2048),
     mode: str = typer.Option("iterative", "--mode"),
     out: Optional[Path] = typer.Option(None, "--out", "-o",
-                                       help="Output PDF path (its folder receives the other artifacts)."),
+                                       help="Output PDF path; its folder receives the other artifacts."),
+    out_dir: Optional[Path] = typer.Option(None, "--out-dir",
+                                           help="Output folder, when you do not need an exact PDF name. "
+                                                "Same flag as `kx primers build`."),
     copy_to: Optional[Path] = typer.Option(None, "--copy-to",
                                            help="Also copy the finished files here."),
     json_out: bool = JSON,
@@ -809,21 +812,24 @@ def convert(
     primers_builder, _, primers_engines, _, _ = _primer_deps()
     engine = _check_engine(engine or config.get("primer_engine", "auto"), primers_engines)
     model = model or (config.get("primer_model", "") or None)
+    if out and out_dir:
+        output.error("pass --out (an exact PDF path) or --out-dir (a folder), not both.")
+        raise typer.Exit(code=2)
     name = topic or Path(source).stem.replace("_", " ").replace("-", " ").strip() or source
-    out_dir = out.parent if out else Path("./dist/convert")
+    target_dir = out.parent if out else (out_dir or Path("./dist/convert"))
     req = primers_builder.BuildRequest(
         topic=name, source=source, personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark, author=author, engine=engine, model=model,
         api_base=api_base, num_ctx=num_ctx,
         mode="iterative" if mode.startswith("iterative") else mode,
-        out_dir=out_dir, style=style,
+        out_dir=target_dir, style=style,
         copy_to=copy_to or (config.get("primer_copy_to", "") or None))
     from .primers import builder as pb
     if out:  # honor the exact --out filename
         orig_slug = pb.slugify(name)
         _run_build(req, json_out)
-        built = out_dir / f"{orig_slug}.pdf"
+        built = target_dir / f"{orig_slug}.pdf"
         if built.is_file() and built != out:
             os.replace(built, out)
             if not json_out:

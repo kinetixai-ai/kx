@@ -20,6 +20,41 @@ class IngestError(RuntimeError):
     pass
 
 
+# A README is written for GitHub, not for print: badges, link syntax and HTML
+# comments carried straight through and appeared verbatim in the PDF.
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")           # ![alt](url)
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")            # [text](url) -> text
+_MD_REFLINK = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")        # [text][ref] -> text
+_MD_REFDEF = re.compile(r"^\s*\[[^\]]+\]:\s*\S+.*$", re.M)  # [ref]: url
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_HTML_TAG = re.compile(r"<(?:/?)(?:p|br|div|span|img|a|h[1-6]|b|i|em|strong|"
+                       r"center|details|summary|table|tr|td|th|ul|ol|li)\b[^>]*>",
+                       re.I)
+_BADGE_LINE = re.compile(r"^[\s|]*$", re.M)
+
+
+def clean_markdown(text: str) -> str:
+    """Readable prose from a README: drop badges, keep the words."""
+    text = _HTML_COMMENT.sub("", text or "")
+    text = _MD_IMAGE.sub("", text)
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MD_REFLINK.sub(r"\1", text)
+    text = _MD_REFDEF.sub("", text)
+    text = _HTML_TAG.sub("", text)
+    text = re.sub(r"^\s*[-*_]{3,}\s*$", "", text, flags=re.M)   # rules
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)                 # **bold**
+    text = re.sub(r"(?<!\w)\*(?!\s)(.+?)(?<!\s)\*(?!\w)", r"\1", text)  # *italic*
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)                   # `code`
+    # Underscores are left alone on purpose: stripping them would mangle
+    # identifiers like primer_copy_to, which READMEs are full of.
+    # Unpaired markers are left over from a README with unbalanced markup,
+    # or from prose truncated mid-emphasis. They carry no meaning in print.
+    text = text.replace("**", "").replace("``", "")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 @dataclass
 class SourceMaterial:
     kind: str                      # topic | pptx | pdf | markdown | github | arxiv
@@ -108,8 +143,9 @@ def load(source: str | None, topic: str, client: httpx.Client | None = None) -> 
         if suffix == ".pdf":
             return SourceMaterial(kind="pdf", name=p.name, text=_pdf_text(p))
         if suffix in (".md", ".markdown", ".txt"):
-            return SourceMaterial(kind="markdown", name=p.name,
-                                  text=p.read_text(encoding="utf-8", errors="replace"))
+            raw = p.read_text(encoding="utf-8", errors="replace")
+            text = clean_markdown(raw) if suffix != ".txt" else raw
+            return SourceMaterial(kind="markdown", name=p.name, text=text)
         raise IngestError(f"unsupported source file type '{suffix}' "
                           "(supported: .pptx, .pdf, .md, .txt).")
 
@@ -118,7 +154,8 @@ def load(source: str | None, topic: str, client: httpx.Client | None = None) -> 
     try:
         if "github.com" in source:
             text, warnings = _github_text(source, client)
-            return SourceMaterial(kind="github", name=source, text=text, warnings=warnings)
+            return SourceMaterial(kind="github", name=source,
+                                  text=clean_markdown(text), warnings=warnings)
         if _arxiv_id(source) or source.startswith("10."):
             paper = resolve(source, client)
             if paper is None:

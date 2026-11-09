@@ -1072,3 +1072,45 @@ def test_written_pages_survive_a_rendering_failure(tmp_path: Path, monkeypatch):
     assert rescued, "the generated pages were lost"
     data = json.loads(rescued[0].read_text())
     assert data["pages"]
+
+
+# ── ingested markdown is prose, not GitHub markup ─────────────────────────
+
+def test_readme_badges_do_not_reach_the_page():
+    """A README is written for GitHub. Badges and link syntax used to be
+    printed verbatim in the PDF."""
+    from kinetixai.primers.ingest import clean_markdown
+    readme = (
+        "# kx\n\n"
+        "[![PyPI](https://img.shields.io/pypi/v/kinetixai)](https://pypi.org/project/kinetixai/)\n"
+        "[![ci](https://github.com/o/r/actions/workflows/ci.yml/badge.svg)](https://github.com/o/r)\n\n"
+        "<!-- hidden -->\n"
+        "Search across [arXiv](https://arxiv.org) and **more**.\n\n"
+        "---\n<p>Some <b>HTML</b>.</p>\n"
+        "[ref]: https://example.com\n"
+    )
+    out = clean_markdown(readme)
+    for junk in ("img.shields.io", "![", "](", "<!--", "<p>", "<b>", "**", "[ref]:"):
+        assert junk not in out, f"{junk!r} survived: {out!r}"
+    assert "arXiv" in out and "more" in out and "Some HTML" in out
+
+
+def test_clean_markdown_keeps_identifiers_with_underscores():
+    """Stripping underscores would mangle the config keys READMEs are full of."""
+    from kinetixai.primers.ingest import clean_markdown
+    out = clean_markdown("Set `primer_copy_to` and **primer_engine** to begin.")
+    assert "primer_copy_to" in out and "primer_engine" in out
+
+
+def test_unbalanced_emphasis_is_swept_up():
+    """A README with odd ** markers, or prose cut mid-emphasis, left stray
+    markers in the printed page."""
+    from kinetixai.primers.ingest import clean_markdown
+    assert "**" not in clean_markdown("odd **one and **two** three")
+    assert "two" in clean_markdown("odd **one and **two** three")
+
+
+def test_clean_markdown_survives_empty_and_plain_text():
+    from kinetixai.primers.ingest import clean_markdown
+    assert clean_markdown("") == ""
+    assert clean_markdown("just words") == "just words"
