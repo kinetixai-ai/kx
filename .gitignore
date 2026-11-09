@@ -9,3 +9,8 @@ __pycache__/
 # egg-info (any depth)
 src/*.egg-info/
 **/*.egg-info/
+
+# build output, staged uploads and run logs
+dist/
+site-bundle/
+logs/

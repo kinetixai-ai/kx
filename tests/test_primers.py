@@ -1465,3 +1465,64 @@ def test_legacy_completion_ids_do_not_win_the_ranking(monkeypatch):
                         ["babbage-002", "dall-e-3", "davinci-002", "gpt-4o-mini"])
     chat = pv.chat_models(pv.get("openai"))
     assert chat == ["gpt-4o-mini"]
+
+
+# ── ship_primers.py orchestration ─────────────────────────────────────────
+
+def _ship():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "ship_primers", Path(__file__).resolve().parents[1] / "scripts" / "ship_primers.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_ship_script_covers_every_catalog_track():
+    ship = _ship()
+    _, tracks = ship.load_catalog()
+    assert len(tracks) == 24
+    # defaults are merged in, so every track can be built on its own
+    assert all(t.get("engine") and t.get("slug") and t.get("watermark") for t in tracks)
+
+
+def test_ship_build_cmd_carries_watermark_persona_and_slug():
+    ship = _ship()
+    _, tracks = ship.load_catalog()
+    track = next(t for t in tracks if t["slug"] == "gpu-cuda")
+    cmd = ship.build_cmd(track, Path("/tmp/out"), "openai/gpt-oss-120b")
+    assert "--slug" in cmd and cmd[cmd.index("--slug") + 1] == "gpu-cuda"
+    assert cmd[cmd.index("--watermark") + 1] == "Rohit Patel | Narmadya Innovations"
+    assert cmd[cmd.index("--model") + 1] == "openai/gpt-oss-120b"
+    assert cmd[cmd.index("--out-dir") + 1].endswith("gpu-cuda")
+    assert "," in cmd[cmd.index("--persona") + 1]
+
+
+def test_ship_treats_a_thin_pdf_as_unfinished(tmp_path):
+    """A build that technically produced a file is not a shippable primer."""
+    ship = _ship()
+    track = {"slug": "s", "topic": "T", "pages": 8}
+    (tmp_path / "s").mkdir()
+    pdf = tmp_path / "s" / "s.pdf"
+    assert ship.is_finished(track, tmp_path) == (False, "no pdf")
+    pdf.write_bytes(b"x" * 1000)
+    ok, why = ship.is_finished(track, tmp_path)
+    assert ok is False and "kb" in why
+
+
+def test_ship_index_entry_points_at_the_published_url(tmp_path):
+    ship = _ship()
+    slug = "gpu-cuda"
+    src = tmp_path / "out" / slug
+    (src / "images").mkdir(parents=True)
+    (src / f"{slug}.pdf").write_bytes(b"x" * (ship.MIN_PDF_BYTES + 1))
+    (src / f"{slug}.pptx").write_bytes(b"x")
+    (src / "images" / f"{slug}_page01_300dpi.png").write_bytes(b"x")
+    track = {"slug": slug, "topic": "GPU & CUDA", "category": "gpu",
+             "pages": 8, "personas": ["student"]}
+    index = ship.stage([track], tmp_path / "out", tmp_path / "bundle")
+    assert index[0]["url"] == "/primers/gpu-cuda/"
+    assert index[0]["pdf"] == "gpu-cuda/gpu-cuda.pdf"
+    assert index[0]["cover"].endswith("page01_300dpi.png")
+    written = json.loads((tmp_path / "bundle" / "primers_index.json").read_text())
+    assert written["count"] == 1
