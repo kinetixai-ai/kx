@@ -168,7 +168,8 @@ def build_user_prompt(topic: str, pages: int, personas: list[str],
         _sources_json(sources),
     ]
     if source_text:
-        parts.append("SOURCE MATERIAL (from the user's file/repo/paper):\n" + source_text[:20000])
+        parts.append("SOURCE MATERIAL — the user's own file, repository or paper. "
+                     "Explain THIS, concretely.\n" + source_text[:40000])
     parts.append("Return the JSON object now.")
     return "\n\n".join(parts)
 
@@ -187,8 +188,10 @@ def build_page_prompt(topic: str, spec: PageSpec, index: int, total: int,
                      + "\n- ".join(previous_titles))
     parts.append("VERIFIED SOURCES (the only citable works):\n" + _sources_json(sources, 8))
     if source_text:
-        parts.append("SOURCE MATERIAL (from the user's file/repo/paper):\n"
-                     + source_text[:14000])
+        parts.append("SOURCE MATERIAL — the user's own file, repository or paper. "
+                     "Explain THIS, concretely: name its real modules, functions and "
+                     "flows rather than describing the subject in general.\n"
+                     + source_text[:30000])
     # last, because it is the instruction that matters most and recency wins
     parts.append(page_skeleton(spec))
     parts.append("Return the JSON object for this one page now.")

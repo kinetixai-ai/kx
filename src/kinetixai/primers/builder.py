@@ -50,6 +50,7 @@ class BuildRequest:
     min_sections: int = schema.SECTIONS_MIN
     verify_citations: bool = False
     relevance: float = 0.18
+    max_files: int = 0              # 0 = the repo reader's own default
     research_limit: int = 12
     out_dir: Path = Path("./dist/primers")
     copy_to: Path | None = None        # a second home for the finished files
@@ -325,8 +326,12 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
 
     # 1. ingest + research
     log("ingesting source material…")
-    material = ingest.load(req.source, req.topic)
+    material = ingest.load(req.source, req.topic, max_files=req.max_files)
     warnings.extend(material.warnings)
+    if material.files:
+        log(f"read {len(material.files)} files from {material.name}: "
+            + ", ".join(material.files[:6])
+            + (f" (+{len(material.files) - 6} more)" if len(material.files) > 6 else ""))
     log("searching verified sources (arXiv + Semantic Scholar + OpenAlex)…")
     sources = material.papers + _research(req.topic, req.research_limit, warnings,
                                           req.relevance)

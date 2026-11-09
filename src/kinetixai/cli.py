@@ -703,6 +703,9 @@ def primers_build(
                                      help="Density floor: numbered sections required per page."),
     relevance: float = typer.Option(0.18, "--relevance", min=0.0, max=1.0,
                                     help="Citation domain-match threshold; 0 disables filtering."),
+    max_files: int = typer.Option(0, "--max-files", min=0, max=200,
+                                  help="For a GitHub source: how many files to read "
+                                       "(0 uses the default, 40)."),
     verify_citations: bool = typer.Option(False, "--verify-citations",
                                           help="Re-resolve every citation; drop any that fail."),
     out_dir: Path = typer.Option(Path("./dist/primers"), "--out-dir", "-o"),
@@ -727,7 +730,7 @@ def primers_build(
         watermark=watermark or config.get("primer_watermark", "Narmadya Innovations"),
         author=author, engine=engine, model=model,
         api_base=api_base, num_ctx=num_ctx, mode=mode_v,
-        min_sections=min_sections, relevance=relevance,
+        min_sections=min_sections, relevance=relevance, max_files=max_files,
         verify_citations=verify_citations, out_dir=out_dir,
         copy_to=copy_to or (config.get("primer_copy_to", "") or None))
     _run_build(req, json_out)
@@ -802,6 +805,8 @@ def convert(
     api_base: Optional[str] = typer.Option(None, "--api-base"),
     num_ctx: Optional[int] = typer.Option(None, "--num-ctx", min=2048),
     mode: str = typer.Option("iterative", "--mode"),
+    max_files: int = typer.Option(0, "--max-files", min=0, max=200,
+                                  help="For a GitHub source: how many files to read."),
     out: Optional[Path] = typer.Option(None, "--out", "-o",
                                        help="Output PDF path; its folder receives the other artifacts."),
     out_dir: Optional[Path] = typer.Option(None, "--out-dir",
@@ -825,7 +830,7 @@ def convert(
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark or config.get("primer_watermark", "Narmadya Innovations"),
         author=author, engine=engine, model=model,
-        api_base=api_base, num_ctx=num_ctx,
+        api_base=api_base, num_ctx=num_ctx, max_files=max_files,
         mode="iterative" if mode.startswith("iterative") else mode,
         out_dir=target_dir, style=style,
         copy_to=copy_to or (config.get("primer_copy_to", "") or None))

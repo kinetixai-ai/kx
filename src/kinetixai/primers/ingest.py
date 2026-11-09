@@ -61,6 +61,7 @@ class SourceMaterial:
     name: str
     text: str = ""
     papers: list[dict] = field(default_factory=list)   # verified metadata dicts
+    files: list[str] = field(default_factory=list)     # source files actually read
     warnings: list[str] = field(default_factory=list)
 
 
@@ -153,7 +154,8 @@ def _github_text(url: str, client: httpx.Client) -> tuple[str, list[str]]:
     return "\n\n".join(text_parts), warnings
 
 
-def load(source: str | None, topic: str, client: httpx.Client | None = None) -> SourceMaterial:
+def load(source: str | None, topic: str, client: httpx.Client | None = None,
+         max_files: int = 0) -> SourceMaterial:
     """Build SourceMaterial from --source (or just the topic when None)."""
     if not source:
         return SourceMaterial(kind="topic", name=topic)
@@ -176,9 +178,15 @@ def load(source: str | None, topic: str, client: httpx.Client | None = None) -> 
     client = client or net.client()
     try:
         if "github.com" in source:
-            text, warnings = _github_text(source, client)
-            return SourceMaterial(kind="github", name=source,
-                                  text=clean_markdown(text), warnings=warnings)
+            from . import repo as repo_mod
+            try:
+                digest = repo_mod.fetch(source, topic, client,
+                                        max_files=max_files or repo_mod.DEFAULT_MAX_FILES)
+            except repo_mod.RepoError as exc:
+                raise IngestError(str(exc))
+            return SourceMaterial(kind="github", name=digest.ref.slug,
+                                  text=digest.to_text(), warnings=digest.warnings,
+                                  files=[p for p, _ in digest.files])
         if _arxiv_id(source) or source.startswith("10."):
             paper = resolve(source, client)
             if paper is None:

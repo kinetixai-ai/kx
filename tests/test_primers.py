@@ -1161,3 +1161,109 @@ def test_rst_readmes_become_prose():
         "See `the docs <https://example.com/docs>`_ and :mod:`mymodule`.\n")
     assert "shields.io" not in out and "image::" not in out
     assert "the docs" in out and "mymodule" in out
+
+
+# ── reading a repository deeply ───────────────────────────────────────────
+
+from kinetixai.primers import repo as repo_mod  # noqa: E402
+
+
+def test_subdirectory_urls_are_honoured():
+    """A /tree/main/Folder URL means that folder. The path used to be
+    discarded, so the repo root README was read instead."""
+    r = repo_mod.parse_url("https://github.com/rpaut03l/TS-01/tree/main/DSA%26T")
+    assert (r.owner, r.repo, r.ref, r.path) == ("rpaut03l", "TS-01", "main", "DSA&T")
+    assert r.is_file is False
+
+
+def test_every_github_url_form_parses():
+    cases = {
+        "https://github.com/o/r": ("o", "r", "", "", False),
+        "https://github.com/o/r.git": ("o", "r", "", "", False),
+        "git@github.com:o/r.git": ("o", "r", "", "", False),
+        "https://github.com/o/r/tree/v1.2/docs/guide/": ("o", "r", "v1.2", "docs/guide", False),
+        "https://github.com/o/r/blob/dev/src/main.py": ("o", "r", "dev", "src/main.py", True),
+    }
+    for url, expected in cases.items():
+        r = repo_mod.parse_url(url)
+        assert (r.owner, r.repo, r.ref, r.path, r.is_file) == expected, url
+    assert repo_mod.parse_url("https://example.com/not/github") is None
+
+
+def test_noise_is_never_read():
+    for path in ("node_modules/left-pad/index.js", "dist/bundle.min.js",
+                 "package-lock.json", ".venv/lib/python3.12/site-packages/x.py",
+                 "assets/logo.png", "model.safetensors", "build/out.o",
+                 "src/kinetixai.egg-info/PKG-INFO"):
+        assert repo_mod._is_skipped(path) or not repo_mod._is_readable(path), path
+
+
+def test_source_and_docs_are_read():
+    for path in ("src/app.py", "cmd/main.go", "kernel.cu", "docs/guide.md",
+                 "notebook.ipynb", "Dockerfile", "Makefile", "pyproject.toml"):
+        assert repo_mod._is_readable(path) and not repo_mod._is_skipped(path), path
+
+
+def test_ranking_puts_explaining_files_first():
+    from kinetixai.primers.search import terms
+    topic = terms("CLI argument parsing")
+    files = [("tests/test_parser.py", 9000), ("README.md", 4000),
+             ("src/parser.py", 12000), ("vendor/x.py", 500),
+             ("docs/architecture.md", 6000)]
+    ranked = sorted(files, key=lambda e: -repo_mod.score(e[0], e[1], topic))
+    names = [p for p, _ in ranked]
+    assert names[0] == "README.md"
+    assert names.index("src/parser.py") < names.index("tests/test_parser.py")
+    assert names.index("docs/architecture.md") < names.index("tests/test_parser.py")
+
+
+def test_notebook_keeps_source_and_drops_output():
+    nb = json.dumps({"cells": [
+        {"cell_type": "markdown", "source": ["# Title\n", "Prose here.\n"]},
+        {"cell_type": "code", "source": ["print('hi')\n"],
+         "outputs": [{"text": ["a megabyte of output"]}]},
+    ]})
+    out = repo_mod._notebook_text(nb)
+    assert "Prose here" in out and "print('hi')" in out
+    assert "megabyte of output" not in out
+
+
+def test_a_rejected_token_falls_back_to_anonymous(monkeypatch):
+    """A stale GITHUB_TOKEN made PUBLIC repos unreadable: raw.githubusercontent
+    answers 404 to a bad Authorization header, which looks like a missing file."""
+    import httpx
+    seen = []
+
+    class R:
+        def __init__(self, code, text=""):
+            self.status_code, self.text = code, text
+        def json(self):
+            return {}
+
+    class C:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, headers=None, params=None):
+            seen.append("auth" if (headers or {}).get("Authorization") else "anon")
+            return R(404) if (headers or {}).get("Authorization") else R(200, "body")
+
+    monkeypatch.setattr(httpx, "Client", C)
+    with httpx.Client() as c:
+        r = repo_mod._get(c, "https://raw.githubusercontent.com/o/r/HEAD/README.md",
+                          {"Authorization": "Bearer stale"})
+    assert r.status_code == 200 and r.text == "body"
+    assert seen == ["auth", "anon"]
+    assert getattr(r, "kx_token_ignored", False) is True
+
+
+def test_digest_text_has_metadata_layout_then_files():
+    d = repo_mod.RepoDigest(ref=repo_mod.parse_url("https://github.com/o/r"))
+    d.metadata = {"description": "A thing", "language": "Python", "stars": 12}
+    d.tree = [("src/a.py", 100), ("src/b.py", 200)]
+    d.files = [("src/a.py", "def a(): pass")]
+    text = d.to_text()
+    assert text.index("REPOSITORY o/r") < text.index("LAYOUT")
+    assert text.index("LAYOUT") < text.index("--- FILE: src/a.py ---")
+    assert "A thing" in text and "language: Python" in text
+    assert "def a(): pass" in text
