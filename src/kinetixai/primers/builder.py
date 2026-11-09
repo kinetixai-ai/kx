@@ -52,6 +52,10 @@ class BuildRequest:
     min_sections: int = schema.SECTIONS_MIN
     verify_citations: bool = False
     relevance: float = 0.18
+    max_tokens: int = 0             # 0 = the engine's own per-page default.
+                                    # A hosted endpoint reserves this against
+                                    # the per-minute budget on admission, so a
+                                    # cap above that budget is never admitted.
     max_files: int = 0              # 0 = the repo reader's own default
     research_limit: int = 12
     out_dir: Path = Path("./dist/primers")
@@ -236,7 +240,8 @@ def _synthesize_iterative(req: BuildRequest, sources: list[dict], source_text: s
                                          source_text, sources, titles)
         try:
             page = engines.synthesize_page(req.engine, req.model, prompts.PAGE_SYSTEM_PROMPT,
-                                           user, api_base=req.api_base, num_ctx=req.num_ctx)
+                                           user, api_base=req.api_base, num_ctx=req.num_ctx,
+                                           max_tokens=req.max_tokens or None)
         except engines.EngineError as exc:
             warnings.append(f"page {i} ({spec.role}) failed: {exc}")
             continue

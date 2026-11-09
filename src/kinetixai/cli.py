@@ -675,6 +675,12 @@ def primers_build(
     source: Optional[str] = typer.Option(None, "--source", "-s",
                                          help="Optional .pptx/.pdf/.md file, GitHub URL, or arXiv id/DOI."),
     category: str = typer.Option("", "--category", help="Catalog category slug, e.g. gpu, rag, security."),
+    max_tokens: int = typer.Option(0, "--max-tokens", min=0,
+                                   help="Cap the output tokens reserved per page. A hosted "
+                                        "endpoint counts this against your per-minute token "
+                                        "budget on admission, so set it below that budget "
+                                        "minus the prompt (try 3500 on a small free tier). "
+                                        "0 uses the engine default."),
     slug: str = typer.Option("", "--slug",
                              help="Output filename stem. Set it to match a published page, "
                                   "e.g. --slug gpu-cuda-kernel-fusion. Default: from the title."),
@@ -728,6 +734,7 @@ def primers_build(
         raise typer.Exit(code=2)
     req = primers_builder.BuildRequest(
         topic=topic, source=source, category=category, slug=slug,
+        max_tokens=max_tokens,
         personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark or config.get("primer_watermark", "Narmadya Innovations"),

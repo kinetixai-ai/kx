@@ -15,7 +15,7 @@ class ManifestError(ValueError):
 DEFAULTS_KEYS = ("pages", "pdfs", "ppts", "images", "jsons", "watermark", "author",
                  "engine", "model", "api_base", "num_ctx", "mode", "min_sections",
                  "relevance", "verify_citations", "personas", "out_dir",
-                 "research_limit", "copy_to", "category")
+                 "research_limit", "copy_to", "category", "max_tokens")
 # The CLI flag is --json-bundles; accepting only "jsons" meant a manifest
 # written from the CLI's own vocabulary was silently ignored.
 ALIASES = {"json_bundles": "jsons", "json": "jsons", "pdf": "pdfs",
@@ -82,6 +82,7 @@ def load_manifest(path: Path) -> list[BuildRequest]:
             relevance=float(merged["relevance"]) if merged.get("relevance") is not None else 0.18,
             verify_citations=bool(merged.get("verify_citations")),
             research_limit=int(merged.get("research_limit") or 8),
+            max_tokens=int(merged.get("max_tokens") or 0),
             copy_to=Path(merged["copy_to"]).expanduser() if merged.get("copy_to") else None,
             out_dir=out,
         ))

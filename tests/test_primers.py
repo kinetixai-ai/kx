@@ -1638,3 +1638,50 @@ def test_ship_streams_page_progress(tmp_path):
     proc, out = ship.stream([sys.executable, str(script)], "slug")
     assert proc.returncode == 0
     assert "page 1/8" in out and "rendering HTML" in out
+
+
+def test_rate_limit_is_retried_then_explained(monkeypatch):
+    """A per-minute budget refills; a reservation bigger than it never does."""
+    import kinetixai.primers.engines as e
+    sleeps, posts = [], []
+
+    class R429:
+        status_code, text, headers = 429, '{"error":"Rate limit reached"}', {"retry-after": "2"}
+
+    class C:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json=None, headers=None):
+            posts.append(json["max_tokens"])
+            return R429()
+
+    monkeypatch.setattr(e.httpx, "Client", C)
+    monkeypatch.setattr(e.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(e, "RATE_LIMIT_RETRIES", 2)
+    with pytest.raises(e.EngineError) as exc:
+        e._openai_compatible("https://api.groq.com/openai/v1", "m", "s", "u",
+                             key="k", max_tokens=6000)
+    assert len(posts) == 3                       # first try plus two retries
+    assert sleeps == [3.0, 3.0]                  # honoured Retry-After, +1s
+    assert "6000 output tokens" in str(exc.value)
+    assert "--max-tokens" in str(exc.value)
+
+
+def test_max_tokens_flows_from_request_to_the_call(tmp_path, monkeypatch):
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+    seen = []
+
+    def fake(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
+        seen.append(max_tokens)
+        return json.dumps({"title": "P", "takeaway": "t",
+                           "blocks": [dict(x) for x in DENSE_BLOCKS]})
+
+    monkeypatch.setattr(e, "complete", fake)
+    b.build(BuildRequest(topic="T", pages=1, pdfs=0, engine="outline",
+                         out_dir=tmp_path / "a"))        # outline: no model call
+    b.build(BuildRequest(topic="T", pages=1, pdfs=0, engine="ollama",
+                         max_tokens=3500, out_dir=tmp_path / "b"))
+    assert 3500 in seen

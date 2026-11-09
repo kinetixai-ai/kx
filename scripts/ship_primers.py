@@ -131,6 +131,8 @@ def build_cmd(track: dict, out_root: Path, model: str | None) -> list[str]:
         cmd += ["--watermark", str(track["watermark"])]
     if track.get("source"):
         cmd += ["--source", str(track["source"])]
+    if int(track.get("max_tokens") or 0) > 0:
+        cmd += ["--max-tokens", str(int(track["max_tokens"]))]
     if track.get("verify_citations"):
         cmd += ["--verify-citations"]
     if model:
@@ -379,6 +381,8 @@ def main() -> int:
     ap.add_argument("--engine", default="")
     ap.add_argument("--model", default="")
     ap.add_argument("--pages", type=int, default=0)
+    ap.add_argument("--max-tokens", type=int, default=0,
+                    help="output tokens reserved per page; lower it to fit a small TPM budget")
     ap.add_argument("--parallel", type=int, default=4)
     ap.add_argument("--skip-live", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -399,6 +403,9 @@ def main() -> int:
     if args.pages:
         for t in tracks:
             t["pages"] = args.pages
+    if args.max_tokens:
+        for t in tracks:
+            t["max_tokens"] = args.max_tokens
     engine = tracks[0]["engine"]
 
     wanted = {s.strip() for s in args.only.split(",") if s.strip()}

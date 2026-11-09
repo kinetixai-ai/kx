@@ -16,7 +16,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import textwrap
+import time
 
 import httpx
 
@@ -42,6 +44,17 @@ OLLAMA_NUM_CTX = int(os.environ.get("KX_OLLAMA_NUM_CTX", "32768"))
 _THINK = re.compile(r"<(think|thinking|reasoning|scratchpad)>.*?</\1>", re.S | re.I)
 _THINK_OPEN = re.compile(r"<(?:think|thinking|reasoning|scratchpad)>.*$", re.S | re.I)
 MAX_TOKENS = 16000
+
+# A 429 is worth waiting out: a per-minute budget refills. A per-day one
+# does not, so the retries are bounded and the error says which it hit.
+RATE_LIMIT_RETRIES = int(os.environ.get("KX_RATE_LIMIT_RETRIES", "4"))
+RATE_LIMIT_BASE_WAIT = 20.0
+RATE_LIMIT_MAX_WAIT = 90.0
+
+
+def _log(msg: str) -> None:
+    """Progress for a wait the user would otherwise read as a hang."""
+    print(f"  {msg}", file=sys.stderr, flush=True)
 
 
 class EngineError(RuntimeError):
@@ -173,16 +186,42 @@ def _openai_compatible(base: str, model: str, system: str, user: str,
             "response_format": {"type": "json_object"}}
     url = f"{base.rstrip('/')}/chat/completions"
     with httpx.Client(timeout=TIMEOUT) as client:
-        try:
-            r = client.post(url, json=body, headers=headers)
-            if r.status_code == 400 and "response_format" in r.text:
-                body.pop("response_format")  # endpoint predates JSON mode
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            try:
                 r = client.post(url, json=body, headers=headers)
-        except httpx.HTTPError as exc:
-            raise EngineError(_net_hint("the LLM endpoint", base, exc))
-        if r.status_code >= 400:
-            raise EngineError(f"LLM endpoint {base}: HTTP {r.status_code}: {r.text[:300]}")
-        return _message_text(r.json(), f"LLM endpoint {base}")
+                if r.status_code == 400 and "response_format" in r.text:
+                    body.pop("response_format")  # endpoint predates JSON mode
+                    r = client.post(url, json=body, headers=headers)
+            except httpx.HTTPError as exc:
+                raise EngineError(_net_hint("the LLM endpoint", base, exc))
+            if r.status_code == 429 and attempt < RATE_LIMIT_RETRIES:
+                wait = _retry_after(r, attempt)
+                _log(f"rate limited; waiting {wait:.0f}s "
+                     f"(attempt {attempt + 1}/{RATE_LIMIT_RETRIES})")
+                time.sleep(wait)
+                continue
+            if r.status_code == 429:
+                raise EngineError(
+                    f"LLM endpoint {base}: HTTP 429 after {RATE_LIMIT_RETRIES} "
+                    f"retries: {r.text[:200]}\n"
+                    f"This request reserves {max_tokens} output tokens on top of the "
+                    f"prompt. If your per-minute token limit is below that total, no "
+                    f"amount of waiting admits it — lower --max-tokens or raise the limit.")
+            if r.status_code >= 400:
+                raise EngineError(f"LLM endpoint {base}: HTTP {r.status_code}: {r.text[:300]}")
+            return _message_text(r.json(), f"LLM endpoint {base}")
+    raise EngineError(f"LLM endpoint {base}: gave up after {RATE_LIMIT_RETRIES} retries")
+
+
+def _retry_after(response, attempt: int) -> float:
+    """Honour Retry-After when the server sends one, else back off."""
+    raw = response.headers.get("retry-after") or response.headers.get("Retry-After")
+    if raw:
+        try:
+            return min(float(raw) + 1.0, RATE_LIMIT_MAX_WAIT)
+        except ValueError:
+            pass
+    return min(RATE_LIMIT_BASE_WAIT * (2 ** attempt), RATE_LIMIT_MAX_WAIT)
 
 
 def _anthropic(model: str, system: str, user: str) -> str:
@@ -359,7 +398,8 @@ PAGE_MAX_TOKENS = 6000      # one page is small; a big cap only invites timeouts
 
 def synthesize_page(engine: str, model: str | None, system: str, user: str,
                     retries: int = 1, api_base: str | None = None,
-                    num_ctx: int | None = None) -> Page:
+                    num_ctx: int | None = None,
+                    max_tokens: int | None = None) -> Page:
     """One LLM call -> parsed, schema-checked single Page."""
     def parse(data: dict) -> Page:
         # tolerate a model that wraps the page in {"pages": [...]} anyway
@@ -367,7 +407,7 @@ def synthesize_page(engine: str, model: str | None, system: str, user: str,
             data = data["pages"][0]
         return page_from_dict(data)
     return _attempt(engine, model, system, user, api_base, retries, parse,
-                    max_tokens=PAGE_MAX_TOKENS, num_ctx=num_ctx)
+                    max_tokens=max_tokens or PAGE_MAX_TOKENS, num_ctx=num_ctx)
 
 
 # ── offline outliner (no LLM) ─────────────────────────────────────────────
