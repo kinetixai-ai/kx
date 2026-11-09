@@ -675,6 +675,9 @@ def primers_build(
     source: Optional[str] = typer.Option(None, "--source", "-s",
                                          help="Optional .pptx/.pdf/.md file, GitHub URL, or arXiv id/DOI."),
     category: str = typer.Option("", "--category", help="Catalog category slug, e.g. gpu, rag, security."),
+    slug: str = typer.Option("", "--slug",
+                             help="Output filename stem. Set it to match a published page, "
+                                  "e.g. --slug gpu-cuda-kernel-fusion. Default: from the title."),
     persona: str = typer.Option("student", "--persona",
                                 help="Comma list: student,phd,researcher,professor,professional,lab,ai-security."),
     pages: int = typer.Option(8, "--pages", min=1, max=42, help="Exact page count per PDF."),
@@ -724,7 +727,7 @@ def primers_build(
         output.error(f"--mode must be one of: {', '.join(primers_builder.MODES)}")
         raise typer.Exit(code=2)
     req = primers_builder.BuildRequest(
-        topic=topic, source=source, category=category,
+        topic=topic, source=source, category=category, slug=slug,
         personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
         watermark=watermark or config.get("primer_watermark", "Narmadya Innovations"),

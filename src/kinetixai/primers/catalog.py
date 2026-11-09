@@ -20,7 +20,7 @@ DEFAULTS_KEYS = ("pages", "pdfs", "ppts", "images", "jsons", "watermark", "autho
 # written from the CLI's own vocabulary was silently ignored.
 ALIASES = {"json_bundles": "jsons", "json": "jsons", "pdf": "pdfs",
            "ppt": "ppts", "image": "images", "persona": "personas"}
-TRACK_ONLY = {"topic", "source", "category", "personas", "out_dir"}
+TRACK_ONLY = {"topic", "source", "category", "personas", "out_dir", "slug"}
 
 
 def load_manifest(path: Path) -> list[BuildRequest]:
@@ -56,11 +56,15 @@ def load_manifest(path: Path) -> list[BuildRequest]:
         personas = merged.get("personas") or ["student"]
         if isinstance(personas, str):
             personas = [p.strip() for p in personas.split(",") if p.strip()]
-        out = Path(tr["out_dir"]) if tr.get("out_dir") else base_out / slugify(tr["topic"])
+        # The folder follows the slug too, so dist/primers/<slug>/<slug>.pdf
+        # lines up with the published /primers/<slug>/ page.
+        slug = slugify(str(tr["slug"])) if tr.get("slug") else slugify(tr["topic"])
+        out = Path(tr["out_dir"]) if tr.get("out_dir") else base_out / slug
         reqs.append(BuildRequest(
             topic=str(tr["topic"]),
             source=tr.get("source"),
             category=str(tr.get("category") or ""),
+            slug=str(tr.get("slug") or ""),
             personas=personas,
             pages=int(merged.get("pages") or 8),
             pdfs=int(merged.get("pdfs") or 1),

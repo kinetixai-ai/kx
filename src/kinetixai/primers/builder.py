@@ -34,6 +34,8 @@ class BuildRequest:
     topic: str
     source: str | None = None
     category: str = ""
+    slug: str = ""                  # "" = derive from the title; set it to
+                                    # match a published URL exactly
     personas: list[str] = field(default_factory=lambda: ["student"])
     pages: int = 8
     pdfs: int = 1
@@ -405,7 +407,9 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
         warnings.append(f"budget: {problem}")
 
     # 5. render + export
-    slug = slugify(primer.title or req.topic)
+    # An explicit slug wins: the files are usually uploaded to a page whose
+    # URL already exists, and the model is free to reword the title.
+    slug = slugify(req.slug) if req.slug else slugify(primer.title or req.topic)
     result = BuildResult(primer=primer, warnings=warnings)
     log("rendering HTML…")
     try:

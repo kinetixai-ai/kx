@@ -1326,3 +1326,38 @@ def test_a_failing_model_does_not_stop_the_comparison(tmp_path: Path, monkeypatc
     rows = b.compare_models(req, ["broken", "working"])
     assert rows[0]["ok"] is False and "model not found" in rows[0]["error"]
     assert rows[1]["ok"] is True                           # the rest still ran
+
+
+def test_explicit_slug_names_the_files(tmp_path: Path, monkeypatch):
+    """The title is the model's to reword; the slug has to match the URL."""
+    import kinetixai.primers.builder as b
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+    req = BuildRequest(topic="GPU & CUDA: How Your Model Actually Runs on Silicon",
+                       slug="gpu-cuda", engine="outline", pages=1, pdfs=1,
+                       jsons=1, out_dir=tmp_path / "d")
+    b.build(req)
+    names = sorted(p.name for p in (tmp_path / "d").iterdir())
+    assert names == ["gpu-cuda.html", "gpu-cuda.json", "gpu-cuda.pdf"]
+
+
+def test_manifest_slug_sets_folder_and_stem(tmp_path: Path):
+    m = tmp_path / "cat.yaml"
+    m.write_text(
+        "defaults:\n  out_dir: ./dist/primers\n"
+        "tracks:\n"
+        "  - topic: 'Attention & Transformers'\n    slug: attention-transformers\n"
+        "  - topic: 'No slug here'\n",
+        encoding="utf-8")
+    reqs = load_manifest(m)
+    assert reqs[0].slug == "attention-transformers"
+    assert reqs[0].out_dir == Path("dist/primers/attention-transformers")
+    # Unset slug keeps the old behaviour: derived from the topic.
+    assert reqs[1].slug == ""
+    assert reqs[1].out_dir == Path("dist/primers/no-slug-here")
+
+
+def test_shipped_catalog_covers_the_site_with_unique_slugs():
+    reqs = load_manifest(Path(__file__).resolve().parents[1] / "primers_catalog.yaml")
+    assert len(reqs) == 24                                  # the 24 "Coming soon" pages
+    slugs = [r.slug for r in reqs]
+    assert all(slugs) and len(set(slugs)) == len(slugs)     # no collisions on upload

@@ -1,8 +1,14 @@
-# KinetixAI Primer catalog — all 18 tracks.
-# Run: kx primers autobuild --manifest ./primers_catalog.yaml --parallel 4
+# KinetixAI Primer catalog — the 24 primers that still show "Coming soon"
+# on https://kinetixai.ai/primers/ (trifleetrca and gpu-cuda-kernel-fusion
+# are already live, so they are not rebuilt here).
 #
-# defaults apply to every track; any track key overrides them.
-# engine: outline (no LLM, draft scaffolding) | local-vllm | ollama | openai | anthropic | gemini
+# Run:  kx primers autobuild --manifest ./primers_catalog.yaml --parallel 6
+#
+# Each track's `slug` sets the output filename AND folder, so the result lands
+# at dist/primers/<slug>/<slug>.pdf and drops straight onto /primers/<slug>/.
+# Check the slugs against the real site routes before uploading — the two live
+# pages use short slugs (trifleetrca, gpu-cuda-kernel-fusion) and the ones
+# below follow that shape, but only the site knows for certain.
 
 defaults:
   pages: 8
@@ -12,59 +18,151 @@ defaults:
   jsons: 1
   watermark: "Rohit Patel | Narmadya Innovations"
   author: "Rohit Patel"
-  engine: local-vllm
-  model: "Qwen/Qwen2.5-14B-Instruct"
+  engine: groq
+  model: "llama-3.3-70b-versatile"
+  mode: iterative
+  min_sections: 5
   verify_citations: true
+  research_limit: 8
   personas: [student, professional]
   out_dir: ./dist/primers
+  copy_to: "/Users/rohitpatel/My_Companies_Data/KinetixAI-AI/kx-cli/notes/"
 
 tracks:
-  - topic: "Attention & Transformers"
+  # ---------- Core ----------
+  - topic: "Core AI: The Foundations Map"
+    slug: core-ai
     category: core-ai
-    personas: [student, phd, professor]
-  - topic: "Types of RAG"
-    category: rag
-    personas: [student, professional, ai-security]
-  - topic: "Agentic AI"
-    category: agentic
-    personas: [student, professional, ai-security]
-  - topic: "Diffusion Models"
-    category: generative
-    personas: [student, phd]
-  - topic: "Core AI"
-    category: core-ai
-  - topic: "Classical AI"
-    category: classical
-  - topic: "Classical ML"
+    personas: [student, professor]
+
+  - topic: "Classical AI: Search, Logic & Planning"
+    slug: classical-ai
     category: classical
     personas: [student, professor]
-  - topic: "Neural Network Training"
+
+  # ---------- Machine Learning ----------
+  - topic: "Classical ML: Linear Models to Gradient Boosting"
+    slug: classical-ml
+    category: classical
+    personas: [student, professor]
+
+  # ---------- Deep Learning ----------
+  - topic: "Attention & Transformers"
+    slug: attention-transformers
+    category: deep-learning
+    personas: [student, phd, professor]
+
+  - topic: "Neural Network Training: Optimizers & Scaling Laws"
+    slug: neural-network-training
     category: deep-learning
     personas: [student, lab]
-  - topic: "Maths for AI"
+
+  - topic: "Diffusion Models"
+    slug: diffusion-models
+    category: generative
+    personas: [student, phd]
+
+  # ---------- Maths & Optimization ----------
+  - topic: "Maths for AI: Linear Algebra, Probability & Calculus"
+    slug: maths-for-ai
     category: maths
     personas: [student, professor]
+
   - topic: "Optimization & Decision Science"
+    slug: optimization-decision-science
     category: ods
-  - topic: "Advanced DSA"
+    personas: [student, professional]
+
+  # ---------- Advanced DSA ----------
+  - topic: "Advanced DSA for ML & Systems Interviews"
+    slug: advanced-dsa
     category: dsa
-    personas: [student]
-  - topic: "Computer Vision"
+    personas: [student, professional]
+
+  # ---------- Vision & Language ----------
+  - topic: "Computer Vision: Convolutions to Vision Transformers"
+    slug: computer-vision
     category: vision
-  - topic: "NLP & NLU"
+    personas: [student, phd]
+
+  - topic: "NLP & NLU: Tokenizers, Embeddings & Language Understanding"
+    slug: nlp-nlu
     category: nlp
-  - topic: "Research RAG"
+    personas: [student, professional]
+
+  # ---------- RAG ----------
+  - topic: "Research RAG: Building a System That Actually Grounds Answers"
+    slug: research-rag
     category: rag
     personas: [researcher, lab]
-  - topic: "Agent Factory"
+
+  - topic: "Types of RAG: GraphRAG, Self-RAG & Corrective RAG"
+    slug: types-of-rag
+    category: rag
+    personas: [student, professional, ai-security]
+
+  # ---------- Agents ----------
+  - topic: "Agentic AI"
+    slug: agentic-ai
+    category: agentic
+    personas: [student, professional, ai-security]
+
+  - topic: "Agent Factory: Multi-Agent Systems That Ship"
+    slug: agent-factory
     category: agentic
     personas: [professional, lab]
-  - topic: "GPU & CUDA"
+
+  # ---------- GPU / CUDA ----------
+  - topic: "GPU & CUDA: How Your Model Actually Runs on Silicon"
+    slug: gpu-cuda
     category: gpu
     personas: [student, professional, lab]
-  - topic: "GPU Research"
+
+  - topic: "GPU Research: Quantization, Kernel Fusion & Inference"
+    slug: gpu-research
     category: gpu
     personas: [phd, researcher]
-  - topic: "AI Security & Guardrails"
+
+  # ---------- Ops & Systems ----------
+  - topic: "MLOps & DLOps: Shipping Models to Production"
+    slug: mlops-dlops
+    category: mlops
+    personas: [professional, lab]
+
+  - topic: "Advanced Systems for AI: Distributed Training & Serving"
+    slug: advanced-systems
+    category: systems
+    personas: [professional, lab]
+
+  # ---------- Security ----------
+  - topic: "AI Security: Prompt Injection, Jailbreaks & Red-Teaming"
+    slug: ai-security
     category: security
     personas: [ai-security, professional]
+
+  # ---------- Paper Notes ----------
+  # These two are grounded in the real papers, so the primer quotes the
+  # actual architecture rather than the model's memory of it.
+  - topic: "Paper Notes: Attention Is All You Need"
+    slug: paper-attention-is-all-you-need
+    category: papers
+    source: "arxiv:1706.03762"
+    personas: [student, phd, researcher]
+
+  - topic: "Paper Notes: FlashAttention"
+    slug: paper-flashattention
+    category: papers
+    source: "arxiv:2205.14135"
+    personas: [phd, researcher, lab]
+
+  # Your own preprints. They build from the topic plus verified citations as
+  # written; add `source: "arxiv:<id>"` to ground each one in its own PDF.
+  - topic: "Paper Notes: TriCalRAG"
+    slug: paper-tricalrag
+    category: papers
+    personas: [researcher, phd, lab]
+
+  - topic: "Paper Notes: TriShieldRAG"
+    slug: paper-trishieldrag
+    category: papers
+    personas: [researcher, ai-security, lab]
