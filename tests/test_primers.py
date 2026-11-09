@@ -1114,3 +1114,50 @@ def test_clean_markdown_survives_empty_and_plain_text():
     from kinetixai.primers.ingest import clean_markdown
     assert clean_markdown("") == ""
     assert clean_markdown("just words") == "just words"
+
+
+# ── findings from the review pass ─────────────────────────────────────────
+
+def test_doctor_advice_does_not_crash_without_the_primers_extra():
+    """The hint fired a NameError for exactly the user it was written for."""
+    from kinetixai import doctor
+    ch = doctor.run(offline=True)
+    ch["extras"]["primers"]["installed"] = False
+    lines = doctor.advice(ch)
+    assert any("primers" in line.lower() for line in lines)
+
+
+def test_manifest_accepts_the_cli_flag_spelling(tmp_path: Path):
+    """--json-bundles is the flag; a manifest saying json_bundles was ignored."""
+    m = tmp_path / "cat.yaml"
+    m.write_text("defaults:\n  json_bundles: 1\n  pdf: 1\n"
+                 "tracks:\n  - topic: One\n", encoding="utf-8")
+    reqs = load_manifest(m)
+    assert reqs[0].jsons == 1
+    assert reqs[0].pdfs == 1
+
+
+def test_manifest_reports_a_key_it_ignores(tmp_path: Path, capsys):
+    m = tmp_path / "cat.yaml"
+    m.write_text("defaults:\n  pagez: 4\ntracks:\n  - topic: One\n", encoding="utf-8")
+    load_manifest(m)
+    assert "pagez" in capsys.readouterr().err
+
+
+def test_manifest_carries_the_newer_options(tmp_path: Path):
+    m = tmp_path / "cat.yaml"
+    m.write_text("defaults:\n  mode: single\n  relevance: 0.5\n  num_ctx: 8192\n"
+                 "tracks:\n  - topic: One\n", encoding="utf-8")
+    r = load_manifest(m)[0]
+    assert r.mode == "single" and r.relevance == 0.5 and r.num_ctx == 8192
+
+
+def test_rst_readmes_become_prose():
+    """A .rst project used to contribute only its metadata."""
+    from kinetixai.primers.ingest import _strip_rst
+    out = _strip_rst(
+        "Project\n=======\n\n.. image:: https://img.shields.io/badge.svg\n"
+        "   :target: https://example.com\n\n"
+        "See `the docs <https://example.com/docs>`_ and :mod:`mymodule`.\n")
+    assert "shields.io" not in out and "image::" not in out
+    assert "the docs" in out and "mymodule" in out

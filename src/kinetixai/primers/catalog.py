@@ -13,8 +13,14 @@ class ManifestError(ValueError):
 
 
 DEFAULTS_KEYS = ("pages", "pdfs", "ppts", "images", "jsons", "watermark", "author",
-                 "engine", "model", "verify_citations", "personas", "out_dir",
-                 "research_limit")
+                 "engine", "model", "api_base", "num_ctx", "mode", "min_sections",
+                 "relevance", "verify_citations", "personas", "out_dir",
+                 "research_limit", "copy_to", "category")
+# The CLI flag is --json-bundles; accepting only "jsons" meant a manifest
+# written from the CLI's own vocabulary was silently ignored.
+ALIASES = {"json_bundles": "jsons", "json": "jsons", "pdf": "pdfs",
+           "ppt": "ppts", "image": "images", "persona": "personas"}
+TRACK_ONLY = {"topic", "source", "category", "personas", "out_dir"}
 
 
 def load_manifest(path: Path) -> list[BuildRequest]:
@@ -25,12 +31,27 @@ def load_manifest(path: Path) -> list[BuildRequest]:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("tracks"), list):
         raise ManifestError("manifest must be a mapping with a 'tracks' list.")
-    defaults = data.get("defaults") or {}
+    defaults = dict(data.get("defaults") or {})
+    notes: list[str] = []
+
+    def canon(block: dict, where: str) -> dict:
+        fixed = {}
+        for key, value in block.items():
+            name = ALIASES.get(key, key)
+            if name not in DEFAULTS_KEYS and name not in TRACK_ONLY:
+                notes.append(f"{where}: ignoring unknown key {key!r}")
+                continue
+            fixed[name] = value
+        return fixed
+
+    defaults = canon(defaults, "defaults")
     base_out = Path(defaults.get("out_dir", "./dist/primers"))
     reqs: list[BuildRequest] = []
     for i, tr in enumerate(data["tracks"], 1):
         if not isinstance(tr, dict) or not tr.get("topic"):
             raise ManifestError(f"track #{i} needs at least a 'topic'.")
+        tr = canon(tr, f"track {i} ({tr.get('topic', 'unnamed')})") | {
+            "topic": tr.get("topic"), "source": tr.get("source")}
         merged = {k: tr.get(k, defaults.get(k)) for k in DEFAULTS_KEYS}
         personas = merged.get("personas") or ["student"]
         if isinstance(personas, str):
@@ -50,10 +71,18 @@ def load_manifest(path: Path) -> list[BuildRequest]:
             author=str(merged.get("author") or "Rohit Patel"),
             engine=str(merged.get("engine") or "outline"),
             model=merged.get("model"),
+            api_base=merged.get("api_base") or None,
+            num_ctx=int(merged["num_ctx"]) if merged.get("num_ctx") else None,
+            mode=str(merged.get("mode") or "iterative"),
+            min_sections=int(merged.get("min_sections") or 5),
+            relevance=float(merged["relevance"]) if merged.get("relevance") is not None else 0.18,
             verify_citations=bool(merged.get("verify_citations")),
             research_limit=int(merged.get("research_limit") or 8),
+            copy_to=Path(merged["copy_to"]).expanduser() if merged.get("copy_to") else None,
             out_dir=out,
         ))
+    for note in notes:
+        print(f"warning: {note}", file=__import__("sys").stderr)
     return reqs
 
 

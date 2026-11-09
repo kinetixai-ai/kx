@@ -104,6 +104,20 @@ def _pdf_text(path: Path, max_pages: int = 60) -> str:
 
 _GH = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)")
 
+_RST_DIRECTIVE = re.compile(r"^\s*\.\.\s+\w[\w-]*::.*(?:\n(?:\s{3,}.*|\s*))*", re.M)
+_RST_ROLE = re.compile(r":\w+:`([^`]*)`")
+_RST_LINK = re.compile(r"`([^<`]+?)\s*<[^>]+>`_+")
+
+
+def _strip_rst(text: str) -> str:
+    """Readable prose from reStructuredText: drop directives and roles."""
+    text = _RST_DIRECTIVE.sub("", text or "")
+    text = _RST_LINK.sub(r"\1", text)
+    text = _RST_ROLE.sub(r"\1", text)
+    text = re.sub(r"^[=~^\-`\'\"#*+]{3,}\s*$", "", text, flags=re.M)   # underlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 
 def _github_text(url: str, client: httpx.Client) -> tuple[str, list[str]]:
     m = _GH.search(url)
@@ -120,13 +134,22 @@ def _github_text(url: str, client: httpx.Client) -> tuple[str, list[str]]:
                           f"Language: {meta.get('language')}  Stars: {meta.get('stargazers_count')}")
     else:
         warnings.append(f"GitHub repo metadata unavailable (HTTP {r.status_code}).")
-    for branch in ("HEAD",):
-        rr = client.get(f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md")
+    # One URL was tried, README.md at HEAD, so an .rst or lower-case project
+    # contributed nothing but its metadata.
+    readme = None
+    for name in ("README.md", "README.rst", "README.txt", "README",
+                 "readme.md", "docs/README.md"):
+        rr = client.get(f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{name}")
         if rr.status_code == 200 and rr.text.strip():
-            text_parts.append(rr.text)
+            readme = (name, rr.text)
             break
+    if readme is None:
+        warnings.append("no README found; using repo metadata only.")
     else:
-        warnings.append("no README.md found; using repo metadata only.")
+        name, body = readme
+        if name.endswith(".rst"):
+            body = _strip_rst(body)
+        text_parts.append(body)
     return "\n\n".join(text_parts), warnings
 
 

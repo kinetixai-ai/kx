@@ -632,7 +632,7 @@ def _check_engine(engine: str, primers_engines) -> str:
     return name
 
 
-def _run_build(req, json_out: bool):
+def _run_build(req, json_out: bool) -> dict:
     from .primers import builder as primers_builder
     log = (lambda s: None) if json_out else (lambda s: output.err.print(f"[dim]{s}[/dim]"))
     try:
@@ -650,10 +650,10 @@ def _run_build(req, json_out: bool):
         raise typer.Exit(code=1)
     for w in res.warnings:
         output.warn(w)
-    if json_out:
-        output.emit_json(res.to_dict())
-        return
     d = res.to_dict()
+    if json_out:
+        output.emit_json(d)
+        return d
     output.console.print(f"[green]built[/green] [bold]{d['title']}[/bold] ({d['pages']} pages, "
                          f"{d['citations']} verified citations)")
     for label, items in (("pdf", d["pdfs"]), ("png", d["images"]),
@@ -666,6 +666,7 @@ def _run_build(req, json_out: bool):
         folder = Path(d["copied"][0]).parent
         folder = folder.parent if folder.name == "images" else folder
         output.console.print(f"  [green]copied[/green] {len(d['copied'])} files to {folder}")
+    return d
 
 
 @primers_app.command("build")
@@ -682,8 +683,9 @@ def primers_build(
     images: int = typer.Option(0, "--images", min=0, help="300 DPI PNG page cards to export."),
     json_n: int = typer.Option(0, "--json-bundles", min=0,
                                help="Paper Lab JSON bundles (tabs + bibtex + rag_chunks)."),
-    watermark: str = typer.Option("Narmadya Innovations", "--watermark",
-                                  help="Running header/footer watermark."),
+    watermark: Optional[str] = typer.Option(None, "--watermark",
+                                            help="Running header/footer watermark. Default comes from "
+                                                 "`kx config set primer_watermark`."),
     author: str = typer.Option("Rohit Patel", "--author"),
     engine: Optional[str] = typer.Option(None, "--engine",
                                          help="auto | ollama | vllm | lmstudio | llamacpp | claude | "
@@ -722,7 +724,8 @@ def primers_build(
         topic=topic, source=source, category=category,
         personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
-        watermark=watermark, author=author, engine=engine, model=model,
+        watermark=watermark or config.get("primer_watermark", "Narmadya Innovations"),
+        author=author, engine=engine, model=model,
         api_base=api_base, num_ctx=num_ctx, mode=mode_v,
         min_sections=min_sections, relevance=relevance,
         verify_citations=verify_citations, out_dir=out_dir,
@@ -790,7 +793,7 @@ def convert(
     ppts: int = typer.Option(0, "--ppts", min=0),
     images: int = typer.Option(0, "--images", min=0),
     json_n: int = typer.Option(0, "--json-bundles", min=0),
-    watermark: str = typer.Option("Narmadya Innovations", "--watermark"),
+    watermark: Optional[str] = typer.Option(None, "--watermark"),
     author: str = typer.Option("Rohit Patel", "--author"),
     engine: Optional[str] = typer.Option(None, "--engine",
                                          help="auto | ollama | vllm | claude | gemini | openai | mcp | "
@@ -820,22 +823,25 @@ def convert(
     req = primers_builder.BuildRequest(
         topic=name, source=source, personas=[p.strip() for p in persona.split(",") if p.strip()],
         pages=pages, pdfs=pdfs, ppts=ppts, images=images, jsons=json_n,
-        watermark=watermark, author=author, engine=engine, model=model,
+        watermark=watermark or config.get("primer_watermark", "Narmadya Innovations"),
+        author=author, engine=engine, model=model,
         api_base=api_base, num_ctx=num_ctx,
         mode="iterative" if mode.startswith("iterative") else mode,
         out_dir=target_dir, style=style,
         copy_to=copy_to or (config.get("primer_copy_to", "") or None))
-    from .primers import builder as pb
-    if out:  # honor the exact --out filename
-        orig_slug = pb.slugify(name)
-        _run_build(req, json_out)
-        built = target_dir / f"{orig_slug}.pdf"
-        if built.is_file() and built != out:
+    result = _run_build(req, json_out)
+    if out:
+        # Rename the file that was actually built. Guessing the name from the
+        # requested title silently did nothing when an LLM retitled the primer.
+        built = Path(result["pdfs"][0]) if result.get("pdfs") else None
+        if built is None:
+            output.warn("--out was given but no PDF was produced (--pdfs 0?); "
+                        "nothing to rename.")
+        elif built.resolve() != out.resolve():
+            out.parent.mkdir(parents=True, exist_ok=True)
             os.replace(built, out)
             if not json_out:
                 output.console.print(f"[green]saved[/green] {out}")
-    else:
-        _run_build(req, json_out)
 
 
 # ── MCP ───────────────────────────────────────────────────────────────────
@@ -954,7 +960,11 @@ def config_get(key: str = typer.Argument(..., metavar="KEY"), json_out: bool = J
 @config_app.command("set")
 def config_set(key: str = typer.Argument(..., metavar="KEY"), value: str = typer.Argument(..., metavar="VALUE"),
                json_out: bool = JSON) -> None:
-    """Change one setting: endpoint, limit, ollama_url, ollama_model, embed_model, token_store (auto|file)."""
+    """Change one setting. `kx config show` lists them all with their values.
+
+    endpoint, limit, ollama_url, ollama_model, embed_model, token_store
+    (auto|file), primer_engine, primer_model, primer_watermark, primer_copy_to.
+    """
     try:
         val = config.validate(key, value)
     except ValueError as exc:
