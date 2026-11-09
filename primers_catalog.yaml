@@ -15,8 +15,8 @@ defaults:
   ppts: 1
   images: 8
   jsons: 1
-  watermark: "Rohit Patel | Narmadya Innovations"
-  author: "Rohit Patel"
+  watermark: "KinetixAI.AI | NARMADYA INNOVATIONS"
+  author: "KinetixAI.AI"
   engine: groq
   # No model pinned: Groq rotates ids and blocks models per project, so any
   # pin eventually 403s or 404s. Check with: kx primers models groq --verify
