@@ -328,7 +328,7 @@ primer.
 | `--relevance` | `0.18` | Citation domain threshold; `0` disables |
 | `--verify-citations` | off | Re-resolve each citation, drop failures |
 | `--watermark` | `Narmadya Innovations` | Header and footer mark |
-| `--author` | `Rohit Patel` | Name in the page badge |
+| `--author` | `KinetixAI.AI` | Name in the page badge |
 | `--category` | — | Catalog category slug |
 | `--out-dir`, `-o` | `./dist/primers` | Output folder |
 | `--copy-to` | config | Second home for the finished files |

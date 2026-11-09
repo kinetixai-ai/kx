@@ -1688,3 +1688,23 @@ def test_max_tokens_flows_from_request_to_the_call(tmp_path, monkeypatch):
     b.build(BuildRequest(topic="T", pages=1, pdfs=0, engine="ollama",
                          max_tokens=3500, out_dir=tmp_path / "b"))
     assert 3500 in seen
+
+
+def test_no_personal_byline_survives_anywhere_in_the_defaults():
+    """The website asserts "Rohit Patel" never appears in a rendered primer
+    (tests/test_primers_readable.py), so no default here may reintroduce it."""
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for path in list((root / "src").rglob("*.py")) + \
+                list((root / "scripts").rglob("*.py")) + \
+                [root / "primers_catalog.yaml"]:
+        if "Rohit Patel" in path.read_text(encoding="utf-8"):
+            offenders.append(str(path.relative_to(root)))
+    assert offenders == [], f"personal byline still defaulted in: {offenders}"
+
+
+def test_default_watermark_and_author_are_the_brand():
+    req = BuildRequest(topic="T")
+    assert req.author == "KinetixAI.AI"
+    assert "NARMADYA INNOVATIONS" in req.watermark
+    assert "Rohit" not in req.watermark

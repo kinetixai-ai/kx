@@ -108,7 +108,7 @@ class Page:
 class Primer:
     title: str
     subtitle: str = ""
-    author: str = "Rohit Patel"
+    author: str = "KinetixAI.AI"
     watermark: str = "Narmadya Innovations"
     badge: str = "Story to Silicon!"
     topic: str = ""
@@ -204,7 +204,7 @@ def primer_from_dict(d: dict) -> Primer:
     return Primer(
         title=str(d.get("title") or "Untitled Primer"),
         subtitle=str(d.get("subtitle") or ""),
-        author=str(d.get("author") or "Rohit Patel"),
+        author=str(d.get("author") or "KinetixAI.AI"),
         watermark=str(d.get("watermark") or "Narmadya Innovations"),
         badge=str(d.get("badge") or "Story to Silicon!"),
         topic=str(d.get("topic") or ""),

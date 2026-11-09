@@ -42,8 +42,8 @@ class BuildRequest:
     ppts: int = 0
     images: int = 0
     jsons: int = 0
-    watermark: str = "Narmadya Innovations"
-    author: str = "Rohit Patel"
+    watermark: str = "KinetixAI.AI | NARMADYA INNOVATIONS"
+    author: str = "KinetixAI.AI"
     engine: str = "auto"
     model: str | None = None
     api_base: str | None = None

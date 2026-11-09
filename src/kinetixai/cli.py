@@ -695,7 +695,7 @@ def primers_build(
     watermark: Optional[str] = typer.Option(None, "--watermark",
                                             help="Running header/footer watermark. Default comes from "
                                                  "`kx config set primer_watermark`."),
-    author: str = typer.Option("Rohit Patel", "--author"),
+    author: str = typer.Option("KinetixAI.AI", "--author"),
     engine: Optional[str] = typer.Option(None, "--engine",
                                          help="auto | ollama | vllm | lmstudio | llamacpp | claude | "
                                               "gemini | openai | groq | openrouter | mcp | outline ... "
@@ -940,7 +940,7 @@ def convert(
     images: int = typer.Option(0, "--images", min=0),
     json_n: int = typer.Option(0, "--json-bundles", min=0),
     watermark: Optional[str] = typer.Option(None, "--watermark"),
-    author: str = typer.Option("Rohit Patel", "--author"),
+    author: str = typer.Option("KinetixAI.AI", "--author"),
     engine: Optional[str] = typer.Option(None, "--engine",
                                          help="auto | ollama | vllm | claude | gemini | openai | mcp | "
                                               "outline ... (`kx primers engines` lists all)"),

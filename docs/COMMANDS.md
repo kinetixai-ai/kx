@@ -852,7 +852,7 @@ silent one. `--relevance 0` turns filtering off entirely.
 | `--images` | 300 DPI PNG page cards. Default 0. | Social cards, lecture slides, poster panels. |
 | `--json-bundles` | Paper Lab JSON bundles (tabs + bibtex + rag_chunks). Default 0. | Feeding the primer back into a tool, or into `kx rag`. |
 | `--watermark` | Running header/footer text. Default `Narmadya Innovations`. | Your own name or lab. |
-| `--author` | Author line. Default `Rohit Patel`. | |
+| `--author` | Author line. Default `KinetixAI.AI`. | |
 | `--engine` | Which model writes it. `auto` by default (or your `primer_engine` setting). `kx primers engines` lists all. | `outline` for a no-model draft; a named engine for reproducibility. |
 | `--model`, `-m` | Model name for the chosen engine. | Pinning `qwen2.5:14b` instead of whatever is loaded. |
 | `--api-base` | Override the engine's endpoint, e.g. `http://localhost:8000/v1`. | A vLLM server on another port or host. |
@@ -999,8 +999,8 @@ defaults:
   ppts: 1
   images: 8
   jsons: 1
-  watermark: "Rohit Patel | Narmadya Innovations"
-  author: "Rohit Patel"
+  watermark: "KinetixAI.AI | NARMADYA INNOVATIONS"
+  author: "KinetixAI.AI"
   engine: local-vllm
   model: "Qwen/Qwen2.5-14B-Instruct"
   verify_citations: true

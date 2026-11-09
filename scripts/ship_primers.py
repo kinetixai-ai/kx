@@ -118,7 +118,7 @@ def build_cmd(track: dict, out_root: Path, model: str | None) -> list[str]:
         "--images", str(track.get("images", 8)),
         "--json-bundles", str(track.get("jsons", 1)),
         "--engine", str(track["engine"]),
-        "--author", str(track.get("author") or "Rohit Patel"),
+        "--author", str(track.get("author") or "KinetixAI.AI"),
         "--out-dir", str(out_root / slug),
     ]
     if track.get("category"):
