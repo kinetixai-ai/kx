@@ -994,10 +994,22 @@ def test_ollama_with_no_chat_model_says_what_to_pull(monkeypatch):
 
 # ── dependencies are checked before the model runs, not after ─────────────
 
+def _block_import(monkeypatch, name, error=None):
+    """Make one module fail to import, the way a real environment does."""
+    import importlib
+    real = importlib.import_module
+
+    def fake(mod, *a, **kw):
+        if mod == name:
+            raise error or ImportError("No module named %r" % name)
+        return real(mod, *a, **kw)
+
+    monkeypatch.setattr(importlib, "import_module", fake)
+
+
 def test_preflight_runs_before_any_model_call(tmp_path: Path, monkeypatch):
     """Discovering a missing renderer after eight pages of local inference
     throws away everything the run produced."""
-    import importlib.util
     import kinetixai.primers.builder as b
     import kinetixai.primers.engines as e
 
@@ -1009,9 +1021,7 @@ def test_preflight_runs_before_any_model_call(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(e, "complete", never)
     monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec",
-                        lambda name, *a: None if name == "jinja2" else real(name, *a))
+    _block_import(monkeypatch, "jinja2")
 
     req = BuildRequest(topic="T", pages=8, pdfs=1, engine="ollama",
                        out_dir=tmp_path / "d")
@@ -1021,23 +1031,32 @@ def test_preflight_runs_before_any_model_call(tmp_path: Path, monkeypatch):
 
 
 def test_preflight_names_the_install_command(tmp_path: Path, monkeypatch):
-    import importlib.util
     import kinetixai.primers.builder as b
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec",
-                        lambda name, *a: None if name == "pptx" else real(name, *a))
+    _block_import(monkeypatch, "pptx")
     with pytest.raises(b.MissingDependency, match=r"kinetixai\[primers\]"):
         b.preflight(BuildRequest(topic="T", ppts=1, out_dir=tmp_path))
 
 
 def test_preflight_only_checks_what_was_asked_for(tmp_path: Path, monkeypatch):
     """No .pptx requested means python-pptx is not required."""
-    import importlib.util
     import kinetixai.primers.builder as b
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec",
-                        lambda name, *a: None if name == "pptx" else real(name, *a))
+    _block_import(monkeypatch, "pptx")
     b.preflight(BuildRequest(topic="T", pdfs=1, ppts=0, out_dir=tmp_path))
+
+
+def test_preflight_catches_an_installed_but_broken_library(tmp_path: Path, monkeypatch):
+    """WeasyPrint installs cleanly on macOS and then fails at import without
+    Homebrew's pango. find_spec cannot see that; importing can."""
+    import kinetixai.primers.builder as b
+    _block_import(monkeypatch, "weasyprint",
+                  OSError("cannot load library 'libpango-1.0-0': not found"))
+    with pytest.raises(b.MissingDependency) as excinfo:
+        b.preflight(BuildRequest(topic="T", pdfs=1, out_dir=tmp_path))
+    message = str(excinfo.value)
+    assert "will not import" in message
+    assert "libpango" in message
+    assert "brew install pango" in message       # and how to fix it
+    assert "KX_PDF_ENGINE=playwright" in message
 
 
 def test_written_pages_survive_a_rendering_failure(tmp_path: Path, monkeypatch):

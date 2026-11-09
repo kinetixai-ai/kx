@@ -103,7 +103,7 @@ def preflight(req: "BuildRequest") -> None:
     Finding out after eight pages of local inference that jinja2 is missing
     throws away everything the run just produced.
     """
-    import importlib.util
+    import importlib
     import os
 
     needed = list(_RENDER_DEPS)
@@ -117,19 +117,40 @@ def preflight(req: "BuildRequest") -> None:
     if req.ppts > 0:
         needed += _PPTX_DEPS
 
-    missing = []
+    # Import rather than find_spec: WeasyPrint installs cleanly on macOS and
+    # then fails at import without Homebrew's pango, which find_spec cannot
+    # see. A broken install has to be caught here, not after a model run.
+    missing: list[tuple[str, str]] = []
+    broken: list[tuple[str, str, str]] = []
     for mod, why in needed:
-        if importlib.util.find_spec(mod) is None and (mod, why) not in missing:
-            missing.append((mod, why))
-    if not missing:
+        try:
+            importlib.import_module(mod)
+        except ImportError as exc:
+            if mod in str(exc) or "No module named" in str(exc):
+                missing.append((mod, why))
+            else:
+                broken.append((mod, why, str(exc)[:160]))
+        except Exception as exc:  # noqa: BLE001 — a system-library failure
+            broken.append((mod, why, f"{exc.__class__.__name__}: {exc}"[:160]))
+    if not missing and not broken:
         return
-    names = ", ".join(sorted({m for m, _ in missing}))
-    uses = ", ".join(sorted({w for _, w in missing}))
-    raise MissingDependency(
-        f"{uses} needs {names}, which is not installed.\n"
-        "  pip  : pip install 'kinetixai[primers]'\n"
-        "  pipx : pipx inject kinetixai jinja2 pyyaml python-pptx pypdf "
-        "pypdfium2 pillow weasyprint")
+
+    lines: list[str] = []
+    if missing:
+        names = ", ".join(sorted({m for m, _ in missing}))
+        uses = ", ".join(sorted({w for _, w in missing}))
+        lines.append(f"{uses} needs {names}, which is not installed.")
+        lines.append("  pip  : pip install 'kinetixai[primers]'")
+        lines.append("  pipx : pipx inject kinetixai jinja2 pyyaml python-pptx "
+                     "pypdf pypdfium2 pillow weasyprint")
+    for mod, why, detail in broken:
+        lines.append(f"{why} needs {mod}, which is installed but will not import:")
+        lines.append(f"  {detail}")
+        if mod == "weasyprint":
+            lines.append("  macOS: brew install pango gdk-pixbuf libffi")
+            lines.append("  or:    pip install playwright && playwright install chromium")
+            lines.append("         export KX_PDF_ENGINE=playwright")
+    raise MissingDependency("\n".join(lines))
 
 
 class MissingDependency(RuntimeError):
