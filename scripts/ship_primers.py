@@ -276,13 +276,34 @@ def callable_models(engine: str) -> tuple[list[str], list[dict]]:
     model and then returns 403 model_permission_blocked_project for it, so
     clearing a batch run on the list alone fails all 24 tracks.
     """
-    r = subprocess.run(["kx", "primers", "models", engine, "--verify", "--json"],
-                       capture_output=True, text=True)
+    cmd = ["kx", "primers", "models", engine, "--verify", "--json"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
     try:
         data = json.loads(r.stdout)
     except json.JSONDecodeError:
-        return [], []
+        # Never report "no model can be called" for what is actually a broken
+        # verification step: say what failed, then fall back to the plain list
+        # so a bug here can't block a build that would have worked.
+        print(f"  verification did not run: `{' '.join(cmd)}` exited {r.returncode}",
+              file=sys.stderr)
+        detail = (r.stderr or r.stdout or "").strip()
+        if detail:
+            print("  " + detail.splitlines()[0][:300], file=sys.stderr)
+        listed = plain_models(engine)
+        if listed:
+            print(f"  falling back to the unverified list: {', '.join(listed)}",
+                  file=sys.stderr)
+        return listed, []
     return (data.get("callable") or []), (data.get("checks") or [])
+
+
+def plain_models(engine: str) -> list[str]:
+    r = subprocess.run(["kx", "primers", "models", engine, "--json"],
+                       capture_output=True, text=True)
+    try:
+        return json.loads(r.stdout).get("models") or []
+    except json.JSONDecodeError:
+        return []
 
 
 def preflight(engine: str) -> list[str]:
@@ -294,6 +315,19 @@ def preflight(engine: str) -> list[str]:
         sys.exit("this kx is too old for --slug. Run:  git pull && pip install -e '.[primers]'")
     if engine in ("outline", "mcp"):
         return []
+    # Only hosted engines need permission verification. A local server has no
+    # project allowlist, and probing it loads the weights at full context for
+    # an 8-token request, which is slow enough to look like a hang.
+    local = engine in ("ollama", "vllm", "llamacpp", "lmstudio", "jan",
+                       "localai", "tgi", "textgen", "llamafile")
+    if local:
+        listed = plain_models(engine)
+        if not listed:
+            print(f"\nengine {engine!r}: the server is not serving a chat model. "
+                  f"Start it, or `ollama pull qwen2.5:7b`.", file=sys.stderr)
+            sys.exit(1)
+        print(f"engine {engine}: {len(listed)} model(s), using {listed[0]}")
+        return listed
     usable, checks = callable_models(engine)
     for c in checks:
         print(f"  {'ok  ' if c['callable'] else 'FAIL'} {c['model']:28} {c['detail']}")

@@ -1580,3 +1580,46 @@ def test_verify_model_never_raises(monkeypatch):
     monkeypatch.setattr(e, "complete", boom)
     ok, why = e.verify_model("groq", "m")
     assert ok is False and "socket exploded" in why
+
+
+def test_ship_falls_back_when_verification_itself_breaks(monkeypatch):
+    """A broken verify step must not be reported as 'no model can be called'."""
+    ship = _ship()
+    calls = []
+
+    class R:
+        def __init__(self, rc, out, err=""):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if "--verify" in cmd:
+            return R(2, "", "Error: No such option: --verify")
+        return R(0, json.dumps({"models": ["openai/gpt-oss-20b"]}))
+
+    monkeypatch.setattr(ship.subprocess, "run", fake_run)
+    usable, checks = ship.callable_models("groq")
+    assert usable == ["openai/gpt-oss-20b"]       # fell back, did not report none
+    assert checks == []
+    assert any("--verify" in c for c in calls)
+
+
+def test_ship_does_not_probe_a_local_server(monkeypatch):
+    """Probing ollama loads the weights at full context for an 8-token call."""
+    ship = _ship()
+    seen = []
+
+    class R:
+        def __init__(self, out):
+            self.returncode, self.stdout, self.stderr = 0, out, ""
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        if "--help" in cmd:
+            return R("--slug  Output filename stem.")
+        return R(json.dumps({"models": ["qwen3.6-32k:latest"]}))
+
+    monkeypatch.setattr(ship.subprocess, "run", fake_run)
+    monkeypatch.setattr(ship.shutil, "which", lambda n: "/usr/local/bin/kx")
+    assert ship.preflight("ollama") == ["qwen3.6-32k:latest"]
+    assert not any("--verify" in c for c in seen)
