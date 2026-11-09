@@ -19,9 +19,10 @@ defaults:
   watermark: "Rohit Patel | Narmadya Innovations"
   author: "Rohit Patel"
   engine: groq
-  # Groq rotates its catalogue; this is what the key serves today. Check with
-  # `kx primers models groq`, or delete the line and kx asks the endpoint.
-  model: "openai/gpt-oss-120b"
+  # No model pinned on purpose. Groq rotates ids AND blocks models per
+  # project, so any pin here eventually 403s or 404s on every page. Left
+  # unset, kx resolves whatever the key can actually call. To pin one,
+  # check it first with: kx primers models groq --verify
   mode: iterative
   min_sections: 5
   verify_citations: true
