@@ -138,32 +138,57 @@ def build_cmd(track: dict, out_root: Path, model: str | None) -> list[str]:
     return cmd
 
 
+def first_real_error(text: str) -> str:
+    """The line that says what went wrong, not the trailing 'try this' hint.
+
+    kx prints a summary, then one line per failed page, then a suggestion.
+    Taking the tail caught the suggestion and threw the cause away.
+    """
+    interesting = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("Try `kx"):
+            continue
+        if any(k in line for k in ("HTTP ", "failed:", "error:", "Error",
+                                   "Traceback", "rate limit", "429", "400",
+                                   "401", "403", "404", "timeout", "Timeout")):
+            interesting.append(line)
+    # The per-page cause is more specific than the summary that precedes it.
+    for line in interesting:
+        if "failed:" in line or "HTTP " in line:
+            return line[:500]
+    return (interesting[0][:500] if interesting else "failed with no error output")
+
+
 def run_one(track: dict, out_root: Path, models: list[str | None],
             logs: Path) -> dict:
     """Build one track, retrying on the next model if the first fails."""
     slug = track["slug"]
     started = time.time()
     attempts: list[dict] = []
+    log_path = logs / f"{slug}.log"
+    chunks: list[str] = []
     for model in models:
         cmd = build_cmd(track, out_root, model)
         proc = subprocess.run(cmd, capture_output=True, text=True)
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        (logs / f"{slug}.log").write_text(
-            " ".join(cmd) + "\n\n" + (proc.stdout or "") + (proc.stderr or ""),
-            encoding="utf-8")
+        output = (proc.stdout or "") + (proc.stderr or "")
+        chunks.append(f"$ {' '.join(cmd)}\n\n{output}\n")
+        log_path.write_text("\n".join(chunks), encoding="utf-8")
         ok, why = is_finished(track, out_root)
-        attempts.append({"model": model or "auto", "exit": proc.returncode,
-                         "ok": ok, "detail": why})
+        attempt = {"model": model or "auto", "exit": proc.returncode, "ok": ok}
         if ok:
+            attempt["detail"] = why
+            attempts.append(attempt)
             return {"slug": slug, "topic": track["topic"], "ok": True,
                     "seconds": round(time.time() - started, 1),
                     "detail": why, "attempts": attempts}
-        # Keep the last few lines; the full output is in the log file.
-        attempts[-1]["stderr_tail"] = " | ".join(tail[-3:])[:400]
+        attempt["detail"] = why if "pdf" in why else first_real_error(output)
+        attempt["error"] = first_real_error(output)
+        attempts.append(attempt)
     return {"slug": slug, "topic": track["topic"], "ok": False,
             "seconds": round(time.time() - started, 1),
-            "detail": attempts[-1].get("stderr_tail", "failed"),
-            "attempts": attempts}
+            "detail": attempts[-1]["error"], "attempts": attempts,
+            "log": str(log_path)}
 
 
 # ── stage for the site ────────────────────────────────────────────────────
@@ -244,6 +269,17 @@ def write_report(path: Path, results: list[dict], skipped: list[dict],
 
 # ── main ──────────────────────────────────────────────────────────────────
 
+def served_models(engine: str) -> list[str]:
+    r = subprocess.run(["kx", "primers", "models", engine, "--json"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return []
+    try:
+        return json.loads(r.stdout).get("models") or []
+    except json.JSONDecodeError:
+        return []
+
+
 def preflight(engine: str) -> None:
     if not shutil.which("kx"):
         sys.exit("kx is not on PATH. Run:  pip install -e '.[primers]'")
@@ -322,18 +358,29 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    # Retry ladder: the chosen model, then auto-resolution, then the
-    # deterministic draft so a stubborn track still ships something.
-    ladder: list[str | None] = [args.model or None, None]
-    ladder = list(dict.fromkeys(ladder))
+    # Retry ladder: the chosen model, then a genuinely different one from
+    # the served list. [x, None] deduped to a single attempt, so the retry
+    # this script advertised never actually ran.
+    ladder: list[str | None] = []
     if not todo:
         print("nothing to build.")
     else:
         preflight(engine)
+        served = served_models(engine)
+        ladder = [args.model] if args.model else ([served[0]] if served else [None])
+        for m in served:
+            if m not in ladder and len(ladder) < 2:
+                ladder.append(m)
+        print("model ladder: " + " → ".join(str(m or "auto") for m in ladder))
 
     started = time.time()
     results: list[dict] = []
+    aborted = False
     if todo:
+        # A wrong key, a rate limit or an unparseable model fails every track
+        # the same way. Stop after the first few rather than running all 24
+        # into the same wall and reporting it 24 times.
+        give_up_after = max(2, min(3, len(todo)))
         workers = max(1, min(args.parallel, 8))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(run_one, t, out_root, ladder, logs): t for t in todo}
@@ -343,8 +390,18 @@ def main() -> int:
                 done += 1
                 mark = "ok  " if r["ok"] else "FAIL"
                 print(f"[{done}/{len(todo)}] {mark} {r['slug']:34} "
-                      f"{r['seconds']}s  {r['detail'][:80]}")
+                      f"{r['seconds']}s  {r['detail'][:110]}")
                 results.append(r)
+                if (not aborted and len(results) >= give_up_after
+                        and not any(x["ok"] for x in results)):
+                    aborted = True
+                    print(f"\nstopping: the first {len(results)} tracks all failed "
+                          f"the same way. Nothing is wrong with the remaining "
+                          f"{len(todo) - len(results)} topics — fix the cause and re-run.")
+                    print(f"  cause: {results[-1]['detail'][:300]}")
+                    print(f"  full log: {results[-1].get('log', logs)}")
+                    for f in futures:
+                        f.cancel()
 
     index = stage(tracks, out_root, bundle)
     elapsed = time.time() - started

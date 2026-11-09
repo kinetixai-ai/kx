@@ -1526,3 +1526,17 @@ def test_ship_index_entry_points_at_the_published_url(tmp_path):
     assert index[0]["cover"].endswith("page01_300dpi.png")
     written = json.loads((tmp_path / "bundle" / "primers_index.json").read_text())
     assert written["count"] == 1
+
+
+def test_ship_error_report_names_the_cause_not_the_hint():
+    """Taking the stderr tail caught kx's 'Try ...' suggestion, not the error."""
+    ship = _ship()
+    out = ("error: every page failed to generate with engine 'groq'.\n"
+           "  page 1 (overview) failed: LLM endpoint https://api.groq.com/openai/v1: "
+           'HTTP 429: {"error":{"message":"Rate limit reached"}}\n\n'
+           "  (and 5 more)\n\n"
+           "Try `kx primers engines` to see what is ready, pass --engine explicitly.")
+    got = ship.first_real_error(out)
+    assert "429" in got and "Rate limit reached" in got
+    assert "Try `kx" not in got
+    assert ship.first_real_error("") == "failed with no error output"
