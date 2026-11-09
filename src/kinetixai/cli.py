@@ -820,6 +820,43 @@ def primers_engines_cmd(
     output.console.print("[dim]Set a default:[/dim] kx config set primer_engine <name>")
 
 
+@primers_app.command("models")
+def primers_models_cmd(
+    engine: str = typer.Argument(..., help="Engine name, e.g. groq, gemini, ollama."),
+    json_out: bool = JSON,
+) -> None:
+    """List the chat models an engine's endpoint actually serves.
+
+    A built-in default can go stale and a hosted key is only entitled to
+    part of the catalogue, so this is the list --model can be set from.
+    """
+    _primer_deps()
+    from .primers import providers as pv
+    p = pv.get(engine)
+    if p is None:
+        output.error(f"unknown engine {engine!r}. Try: kx primers engines")
+        raise typer.Exit(2)
+    if p.protocol in ("mcp", "none"):
+        output.error(f"--engine {p.name} does not use a model.")
+        raise typer.Exit(2)
+    if p.keys and not pv.api_key(p) and not p.local:
+        output.error(f"set {p.keys[0]} first, then re-run.")
+        raise typer.Exit(2)
+    served = pv.rank_models(pv.chat_models(p, timeout=10.0))
+    if json_out:
+        output.emit_json({"engine": p.name, "models": served,
+                          "would_use": served[0] if served else None})
+        return
+    if not served:
+        output.error(f"{p.label} returned no chat models. "
+                     "Check the key, or the endpoint if it is self-hosted.")
+        raise typer.Exit(1)
+    output.console.print(f"[bold]{p.label}[/bold] serves {len(served)} chat model(s):")
+    for m in served:
+        output.console.print(f"  {m}")
+    output.console.print(f"\n[dim]without --model, kx would use:[/dim] [bold]{served[0]}[/bold]")
+
+
 @primers_app.command("autobuild")
 def primers_autobuild(
     manifest: Path = typer.Option(Path("./primers_catalog.yaml"), "--manifest",

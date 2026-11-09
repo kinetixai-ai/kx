@@ -19,7 +19,9 @@ defaults:
   watermark: "Rohit Patel | Narmadya Innovations"
   author: "Rohit Patel"
   engine: groq
-  model: "llama-3.3-70b-versatile"
+  # Groq rotates its catalogue; this is what the key serves today. Check with
+  # `kx primers models groq`, or delete the line and kx asks the endpoint.
+  model: "openai/gpt-oss-120b"
   mode: iterative
   min_sections: 5
   verify_citations: true

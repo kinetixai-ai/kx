@@ -304,13 +304,22 @@ def complete(engine: str, model: str | None, system: str, user: str,
     key = providers.api_key(p)
     if p.keys and not key and not p.local:
         raise EngineError(f"set {p.keys[0]} to use --engine {p.name} ({p.label}).")
-    if not model and p.local:
-        # A local server serves whatever is loaded; ask it rather than
-        # demanding --model for something the user cannot easily name.
-        model = providers.choose_model(p, requested or p.default_model or None) or "local-model"
     if not model:
+        # Ask the endpoint what it serves. A local server serves whatever is
+        # loaded; a hosted key serves whatever the account is entitled to,
+        # which is why a built-in default goes stale and 404s on every page.
+        model = providers.choose_model(p, requested or p.default_model or None)
+        if not model and p.local:
+            model = "local-model"
+    if not model:
+        served = providers.chat_models(p)
+        if served:
+            raise EngineError(
+                f"--engine {p.name} could not pick a model. Pass one of: "
+                + ", ".join(providers.rank_models(served)[:6]))
         raise EngineError(
-            f"--engine {p.name} has no default model; pass --model.")
+            f"--engine {p.name} has no default model; pass --model. "
+            f"Run `kx primers models {p.name}` to see what your key serves.")
     return _openai_compatible(base, model, system, user, key=key, max_tokens=max_tokens)
 
 

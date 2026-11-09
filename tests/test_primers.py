@@ -852,7 +852,7 @@ def _fake_http(monkeypatch, payload, status=200):
         def __init__(self, **kw): pass
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def get(self, url): return R()
+        def get(self, url, headers=None): return R()
 
     monkeypatch.setattr(httpx, "Client", C)
 
@@ -1361,3 +1361,56 @@ def test_shipped_catalog_covers_the_site_with_unique_slugs():
     assert len(reqs) == 24                                  # the 24 "Coming soon" pages
     slugs = [r.slug for r in reqs]
     assert all(slugs) and len(set(slugs)) == len(slugs)     # no collisions on upload
+
+
+def test_hosted_model_list_sends_the_api_key(monkeypatch):
+    """Without auth, /models returns nothing and a stale default 404s."""
+    import kinetixai.primers.providers as pv
+    seen = {}
+
+    class R:
+        status_code = 200
+        def json(self): return {"data": [{"id": "openai/gpt-oss-120b"}]}
+
+    class C:
+        def __init__(self, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, headers=None):
+            seen["headers"] = headers or {}
+            return R()
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+    monkeypatch.setattr("httpx.Client", C)
+    assert pv.models(pv.get("groq")) == ["openai/gpt-oss-120b"]
+    assert seen["headers"].get("Authorization") == "Bearer gsk_test"
+
+
+def test_speech_and_guard_models_are_not_offered_as_chat(monkeypatch):
+    import kinetixai.primers.providers as pv
+    catalogue = ["whisper-large-v3", "canopylabs/orpheus-v1-english",
+                 "meta-llama/llama-prompt-guard-2-86m", "openai/gpt-oss-safeguard-20b",
+                 "openai/gpt-oss-20b", "openai/gpt-oss-120b", "allam-2-7b"]
+    monkeypatch.setattr(pv, "models", lambda p, timeout=2.0: catalogue)
+    chat = pv.chat_models(pv.get("groq"))
+    assert "whisper-large-v3" not in chat
+    assert "canopylabs/orpheus-v1-english" not in chat
+    assert "meta-llama/llama-prompt-guard-2-86m" not in chat
+    assert "openai/gpt-oss-safeguard-20b" not in chat
+    # The biggest usable model leads, so an unattended pick is a sane one.
+    assert pv.rank_models(chat)[0] == "openai/gpt-oss-120b"
+
+
+def test_stale_hosted_default_falls_back_to_a_served_model(monkeypatch):
+    """The Groq default 404'd on every page; it must not be used blindly."""
+    import kinetixai.primers.providers as pv
+    monkeypatch.setattr(pv, "models", lambda p, timeout=2.0:
+                        ["openai/gpt-oss-120b", "qwen/qwen3.8-27b"])
+    got = pv.choose_model(pv.get("groq"), "llama-3.3-70b-versatile")
+    assert got == "openai/gpt-oss-120b"
+
+
+def test_explicit_model_is_never_second_guessed(monkeypatch):
+    import kinetixai.primers.providers as pv
+    monkeypatch.setattr(pv, "models", lambda p, timeout=2.0: ["qwen/qwen3.8-27b"])
+    assert pv.choose_model(pv.get("groq"), "qwen/qwen3.8-27b") == "qwen/qwen3.8-27b"

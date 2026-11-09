@@ -175,9 +175,16 @@ def models(p: Provider, timeout: float = 2.0) -> list[str]:
     failing eight times is worse than not finding one.
     """
     import httpx
+    # A hosted endpoint answers /models only for a caller it recognises, so
+    # without the key this returned [] and the stale default_model was used.
+    headers = {}
+    if not p.local:
+        key = api_key(p)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
     try:
         with httpx.Client(timeout=timeout) as client:
-            r = client.get(_probe_url(p))
+            r = client.get(_probe_url(p), headers=headers)
         if r.status_code != 200:
             return []
         data = r.json()
@@ -196,7 +203,15 @@ def models(p: Provider, timeout: float = 2.0) -> list[str]:
 # Models that cannot hold a chat: picking one of these would fail in a way
 # that looks like the engine being broken.
 _NOT_CHAT = ("embed", "bge-", "bge:", "e5-", "minilm", "gte-", "rerank",
-             "nomic-embed", "all-minilm", "mxbai-embed", "snowflake-arctic-embed")
+             "nomic-embed", "all-minilm", "mxbai-embed", "snowflake-arctic-embed",
+             # Hosted catalogues list speech, TTS and safety classifiers next
+             # to the chat models. None of them can write a primer page.
+             "whisper", "tts", "orpheus", "prompt-guard", "guard-", "safeguard",
+             "-guard", "moderation", "stable-diffusion", "flux")
+
+# A primer page is a long structured JSON object, so size genuinely helps.
+# Used only to order an unfamiliar catalogue; never to override --model.
+_PREFER = ("120b", "70b", "72b", "mixtral", "405b", "32b", "27b", "20b")
 
 
 def chat_models(p: Provider, timeout: float = 2.0) -> list[str]:
@@ -205,13 +220,24 @@ def chat_models(p: Provider, timeout: float = 2.0) -> list[str]:
             if not any(bad in m.lower() for bad in _NOT_CHAT)]
 
 
+def rank_models(served: list[str]) -> list[str]:
+    """Capable-looking models first, so an unattended pick is a sane one."""
+    def key(m: str) -> tuple[int, str]:
+        low = m.lower()
+        for i, tag in enumerate(_PREFER):
+            if tag in low:
+                return (i, m)
+        return (len(_PREFER), m)
+    return sorted(served, key=key)
+
+
 def choose_model(p: Provider, preferred: str | None = None,
                  timeout: float = 2.0) -> str | None:
-    """The model to use on a local server.
+    """The model to use on a given endpoint.
 
-    A local server serves whatever is loaded, and a name from config may
-    name something that was never pulled, so a stored preference only wins
-    when the server actually has it.
+    A local server serves whatever is loaded, and a hosted key serves
+    whatever that account is entitled to, so a name from config or from a
+    stale built-in default only wins when the endpoint actually has it.
     """
     served = chat_models(p, timeout)
     if preferred and (not served or preferred in served):
@@ -221,7 +247,8 @@ def choose_model(p: Provider, preferred: str | None = None,
         for m in served:                      # llama3.1 matches llama3.1:8b
             if m.split(":")[0] == base:
                 return m
-    return served[0] if served else preferred
+    ranked = rank_models(served)
+    return ranked[0] if ranked else preferred
 
 
 def reachable(p: Provider, timeout: float = 2.0) -> bool | None:
