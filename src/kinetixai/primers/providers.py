@@ -80,8 +80,10 @@ _P: list[Provider] = [
              ("OPENROUTER_API_KEY",), "meta-llama/llama-3.3-70b-instruct",
              base_env="OPENROUTER_BASE_URL",
              note="One key, most open models."),
+    # No pinned default: Groq rotates its catalogue and retires ids, so a
+    # pinned name 404s on every page. The served list is the source of truth.
     Provider("groq", "Groq", "https://api.groq.com/openai/v1", ("GROQ_API_KEY",),
-             "llama-3.3-70b-versatile", base_env="GROQ_BASE_URL",
+             "", base_env="GROQ_BASE_URL",
              note="Open models, very fast."),
     Provider("together", "Together AI", "https://api.together.xyz/v1",
              ("TOGETHER_API_KEY",), "meta-llama/Llama-3.3-70B-Instruct-Turbo",
@@ -166,7 +168,18 @@ def _probe_url(p: Provider) -> str:
     return url + "/models"
 
 
-def models(p: Provider, timeout: float = 2.0) -> list[str]:
+# 2s is right for localhost and far too short for an API over the internet:
+# the probe timed out, the list came back empty, and a stale pinned default
+# was used instead of what the account actually serves.
+LOCAL_PROBE_TIMEOUT = 2.0
+HOSTED_PROBE_TIMEOUT = 10.0
+
+
+def probe_timeout(p: Provider) -> float:
+    return LOCAL_PROBE_TIMEOUT if p.local else HOSTED_PROBE_TIMEOUT
+
+
+def models(p: Provider, timeout: float | None = None) -> list[str]:
     """Model ids a local server is serving, newest API shape first.
 
     Doubles as the reachability test: a port answering with something that
@@ -175,6 +188,7 @@ def models(p: Provider, timeout: float = 2.0) -> list[str]:
     failing eight times is worse than not finding one.
     """
     import httpx
+    timeout = probe_timeout(p) if timeout is None else timeout
     # A hosted endpoint answers /models only for a caller it recognises, so
     # without the key this returned [] and the stale default_model was used.
     headers = {}
@@ -207,14 +221,18 @@ _NOT_CHAT = ("embed", "bge-", "bge:", "e5-", "minilm", "gte-", "rerank",
              # Hosted catalogues list speech, TTS and safety classifiers next
              # to the chat models. None of them can write a primer page.
              "whisper", "tts", "orpheus", "prompt-guard", "guard-", "safeguard",
-             "-guard", "moderation", "stable-diffusion", "flux")
+             "-guard", "moderation", "stable-diffusion", "flux",
+             # Legacy completion and non-text ids sit in hosted catalogues too,
+             # and some sort ahead of the chat models alphabetically.
+             "dall-e", "babbage", "davinci", "curie", "ada-", "sora",
+             "realtime", "transcribe", "image-", "-image", "video")
 
 # A primer page is a long structured JSON object, so size genuinely helps.
 # Used only to order an unfamiliar catalogue; never to override --model.
 _PREFER = ("120b", "70b", "72b", "mixtral", "405b", "32b", "27b", "20b")
 
 
-def chat_models(p: Provider, timeout: float = 2.0) -> list[str]:
+def chat_models(p: Provider, timeout: float | None = None) -> list[str]:
     """Served models that can actually answer a chat request."""
     return [m for m in models(p, timeout)
             if not any(bad in m.lower() for bad in _NOT_CHAT)]
@@ -232,7 +250,7 @@ def rank_models(served: list[str]) -> list[str]:
 
 
 def choose_model(p: Provider, preferred: str | None = None,
-                 timeout: float = 2.0) -> str | None:
+                 timeout: float | None = None) -> str | None:
     """The model to use on a given endpoint.
 
     A local server serves whatever is loaded, and a hosted key serves

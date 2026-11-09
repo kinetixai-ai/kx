@@ -360,8 +360,11 @@ def build(req: BuildRequest, log: Callable[[str], None] = lambda s: None) -> Bui
         req.engine = chosen
     if req.engine != "outline" and not req.model:
         # Name the model in the log: "it used Ollama" is not reproducible.
+        # Hosted endpoints were excluded here, so a pinned default went
+        # straight to the API and 404'd on all eight pages. Resolve once,
+        # for local and hosted alike, so every page reuses one verified name.
         p_ = providers.get(req.engine)
-        if p_ is not None and p_.local:
+        if p_ is not None and p_.protocol not in ("mcp", "none"):
             found = providers.choose_model(p_, p_.default_model or None)
             if found:
                 req.model = found

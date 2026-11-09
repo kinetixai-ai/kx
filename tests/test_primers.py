@@ -645,7 +645,11 @@ def test_every_provider_is_usable():
         assert p.base.startswith("http"), p.name
         if not p.local:
             assert p.keys, f"{p.name} is hosted but names no API key"
-            assert p.default_model, f"{p.name} needs a default model"
+            # Either a pinned default, or an endpoint kx can ask. A pinned
+            # name on a provider that rotates ids is how every page of a
+            # Groq build came back 404 model_not_found.
+            assert p.default_model or p.protocol == "openai", \
+                f"{p.name} has no default model and no discoverable model list"
 
 
 def test_aliases_are_unique_and_resolve():
@@ -693,9 +697,11 @@ def test_openai_compatible_providers_share_one_path(monkeypatch):
 
     monkeypatch.setattr(e.httpx, "Client", FakeClient)
     monkeypatch.setenv("GROQ_API_KEY", "x")
+    # Groq pins no default, so the served list is what a bare call resolves to.
+    monkeypatch.setattr(pv, "models", lambda p, timeout=None: ["openai/gpt-oss-120b"])
     e.complete("groq", None, "s", "u")
     assert seen["url"] == "https://api.groq.com/openai/v1/chat/completions"
-    assert seen["model"] == pv.PROVIDERS["groq"].default_model
+    assert seen["model"] == "openai/gpt-oss-120b"
     monkeypatch.setenv("TOGETHER_API_KEY", "x")
     e.complete("together", "my-model", "s", "u")
     assert seen["url"].startswith("https://api.together.xyz")
@@ -1414,3 +1420,48 @@ def test_explicit_model_is_never_second_guessed(monkeypatch):
     import kinetixai.primers.providers as pv
     monkeypatch.setattr(pv, "models", lambda p, timeout=2.0: ["qwen/qwen3.8-27b"])
     assert pv.choose_model(pv.get("groq"), "qwen/qwen3.8-27b") == "qwen/qwen3.8-27b"
+
+
+def test_hosted_probe_gets_a_longer_timeout_than_localhost():
+    """A 2s timeout against an internet API returned [] and the stale pin won."""
+    import kinetixai.primers.providers as pv
+    assert pv.probe_timeout(pv.get("ollama")) == pv.LOCAL_PROBE_TIMEOUT
+    assert pv.probe_timeout(pv.get("groq")) == pv.HOSTED_PROBE_TIMEOUT
+    assert pv.HOSTED_PROBE_TIMEOUT > pv.LOCAL_PROBE_TIMEOUT
+
+
+def test_groq_has_no_pinned_default_model():
+    """Groq retires ids, so a pin is a 404 on every page waiting to happen."""
+    import kinetixai.primers.providers as pv
+    assert pv.get("groq").default_model == ""
+
+
+def test_a_hosted_engine_resolves_its_model_before_the_pages(tmp_path, monkeypatch):
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+    import kinetixai.primers.providers as pv
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+    monkeypatch.setattr(pv, "models", lambda p, timeout=None:
+                        ["openai/gpt-oss-20b", "openai/gpt-oss-120b"])
+    seen = []
+
+    def fake(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
+        seen.append(model)
+        return json.dumps({"title": "P", "takeaway": "t",
+                           "blocks": [dict(x) for x in DENSE_BLOCKS]})
+
+    monkeypatch.setattr(e, "complete", fake)
+    req = BuildRequest(topic="T", pages=2, pdfs=0, engine="groq",
+                       out_dir=tmp_path / "d")
+    b.build(req)
+    # One resolved name, reused by every page — not None, not a stale pin.
+    assert set(seen) == {"openai/gpt-oss-120b"}
+    assert req.model == "openai/gpt-oss-120b"
+
+
+def test_legacy_completion_ids_do_not_win_the_ranking(monkeypatch):
+    import kinetixai.primers.providers as pv
+    monkeypatch.setattr(pv, "models", lambda p, timeout=None:
+                        ["babbage-002", "dall-e-3", "davinci-002", "gpt-4o-mini"])
+    chat = pv.chat_models(pv.get("openai"))
+    assert chat == ["gpt-4o-mini"]
