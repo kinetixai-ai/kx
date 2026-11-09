@@ -289,3 +289,29 @@ def engines_table(rows: list[dict]) -> None:
             table.add_row(mark, r["engine"], r["label"], needs)
         console.print(table)
         console.print()
+
+
+def compare_table(rows: list[dict]) -> None:
+    """`kx primers compare`: time and page density per candidate model."""
+    from rich.table import Table
+
+    table = Table(box=None, pad_edge=False, show_edge=False)
+    table.add_column("model", style="bold", no_wrap=True)
+    table.add_column("time", justify="right", no_wrap=True)
+    table.add_column("per page", justify="right", no_wrap=True)
+    table.add_column("sections", justify="right", no_wrap=True)
+    table.add_column("words", justify="right", no_wrap=True)
+    table.add_column("quota", justify="right", no_wrap=True)
+    table.add_column("sample")
+    for r in rows:
+        if not r.get("ok"):
+            table.add_row(r["model"], "[red]failed[/red]", "", "", "", "",
+                          f"[red]{escape(str(r.get('error', ''))[:60])}[/red]")
+            continue
+        quota = f"{r['met_quota']}/{r['pages']}"
+        style = "green" if r["met_quota"] == r["pages"] else "yellow"
+        table.add_row(r["model"], f"{r['seconds']:.0f}s", f"{r['seconds_per_page']:.0f}s",
+                      str(r["sections"]), str(r["words"]),
+                      f"[{style}]{quota}[/{style}]",
+                      escape(str(r.get("pdf") or r.get("html") or "")))
+    console.print(table)

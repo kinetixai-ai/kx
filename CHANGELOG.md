@@ -1,6 +1,12 @@
 # Changelog
 
 ## 0.3.0 (unreleased)
+- `kx primers compare --topic X --models a,b,c` builds the same one-page
+  sample with each candidate and prints time, sections, words and whether each
+  met the density quota, so a model is chosen on evidence rather than after an
+  eight-page run. With no `--models` it compares every chat model the local
+  engine serves.
+- Builds now report how long each page took and roughly how much is left.
 - Output dependencies are checked before the first model call, not after the
   last one: a missing renderer used to surface only after a full run of local
   inference, throwing the written pages away. If rendering fails anyway, the

@@ -16,7 +16,7 @@ cannot drag in another discipline's papers.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -225,7 +225,10 @@ def _synthesize_iterative(req: BuildRequest, sources: list[dict], source_text: s
     primer = schema.Primer(title=req.topic, topic=req.topic, watermark=req.watermark,
                            author=req.author, personas=req.personas)
     titles: list[str] = []
+    import time
+    started = time.monotonic()
     for i, spec in enumerate(specs, 1):
+        page_started = time.monotonic()
         log(f"page {i}/{total} ({spec.role})…")
         user = prompts.build_page_prompt(req.topic, spec, i, total, req.personas,
                                          source_text, sources, titles)
@@ -252,6 +255,14 @@ def _synthesize_iterative(req: BuildRequest, sources: list[dict], source_text: s
         page.must_have = list(spec.must_have)   # remembered for the fitting pass
         primer.pages.append(page)
         titles.append(page.title)
+        elapsed = time.monotonic() - page_started
+        done = len(primer.pages)
+        if done < total:
+            eta = (time.monotonic() - started) / done * (total - done)
+            log(f"  page {i} took {elapsed:.0f}s; about {eta / 60:.0f} min left")
+        else:
+            log(f"  page {i} took {elapsed:.0f}s; "
+                f"{(time.monotonic() - started) / 60:.1f} min total")
 
     if not primer.pages:
         # The per-page reasons were the whole diagnosis and used to be
@@ -468,3 +479,54 @@ def _copy_out(files: list[Path], dest: Path, slug: str) -> tuple[list[Path], lis
         except OSError as exc:
             notes.append(f"could not copy {src.name} to {dest} ({exc.strerror or exc})")
     return written, notes
+
+
+# ── comparing models ─────────────────────────────────────────────────────
+
+def compare_models(req: BuildRequest, models: list[str],
+                   log: Callable[[str], None] = lambda s: None) -> list[dict]:
+    """Build the same short sample with several models and measure each.
+
+    Picking a model by reading its name is guesswork, and finding out it
+    is too slow or too thin after an eight-page run is expensive. This
+    builds one page per candidate so the choice is made on evidence.
+    """
+    import time
+
+    out: list[dict] = []
+    base_dir = Path(req.out_dir).expanduser()
+    for model in models:
+        slug = re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-") or "model"
+        trial = replace(req, model=model, pages=req.pages, ppts=0, jsons=0,
+                        out_dir=base_dir / slug, copy_to=None)
+        log(f"trying {model}…")
+        started = time.monotonic()
+        row: dict = {"model": model, "engine": req.engine}
+        try:
+            res = build(trial)
+        except Exception as exc:  # noqa: BLE001 — one bad model must not stop the rest
+            row.update(ok=False, seconds=round(time.monotonic() - started, 1),
+                       error=f"{exc.__class__.__name__}: {exc}")
+            log(f"  {model}: failed — {exc}")
+            out.append(row)
+            continue
+        seconds = time.monotonic() - started
+        pages = res.primer.pages
+        densities = [schema.density(p, req.min_sections, getattr(p, "must_have", None))
+                     for p in pages]
+        row.update(
+            ok=True,
+            seconds=round(seconds, 1),
+            seconds_per_page=round(seconds / max(1, len(pages)), 1),
+            pages=len(pages),
+            sections=round(sum(d.sections for d in densities) / max(1, len(densities)), 1),
+            words=round(sum(d.words for d in densities) / max(1, len(densities))),
+            met_quota=sum(1 for d in densities if d.ok),
+            pdf=str(res.pdf_paths[0]) if res.pdf_paths else None,
+            html=str(res.html_path) if res.html_path else None,
+            warnings=len(res.warnings),
+        )
+        log(f"  {model}: {row['seconds']}s, {row['sections']} sections/page, "
+            f"{row['words']} words/page, {row['met_quota']}/{len(pages)} met the quota")
+        out.append(row)
+    return out

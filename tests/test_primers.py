@@ -1267,3 +1267,62 @@ def test_digest_text_has_metadata_layout_then_files():
     assert text.index("LAYOUT") < text.index("--- FILE: src/a.py ---")
     assert "A thing" in text and "language: Python" in text
     assert "def a(): pass" in text
+
+
+# ── comparing models before committing to one ─────────────────────────────
+
+def test_compare_runs_every_model_and_measures_it(tmp_path: Path, monkeypatch):
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+    used: list[str] = []
+
+    def fake(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
+        used.append(model)
+        blocks = [dict(x) for x in DENSE_BLOCKS]
+        if model == "thin:1b":                      # a model that writes too little
+            blocks = blocks[:2]
+        return json.dumps({"title": "P", "takeaway": "t", "blocks": blocks})
+
+    monkeypatch.setattr(e, "complete", fake)
+    req = BuildRequest(topic="T", pages=1, pdfs=0, engine="ollama",
+                       out_dir=tmp_path / "cmp")
+    rows = b.compare_models(req, ["good:7b", "thin:1b"])
+    assert [r["model"] for r in rows] == ["good:7b", "thin:1b"]
+    assert used[0] == "good:7b" and "thin:1b" in used
+    assert all(r["ok"] for r in rows)
+    assert rows[0]["met_quota"] == 1 and rows[1]["met_quota"] == 0
+    assert rows[0]["sections"] > rows[1]["sections"]
+    assert all(isinstance(r["seconds"], float) for r in rows)
+
+
+def test_compare_writes_each_sample_to_its_own_folder(tmp_path: Path, monkeypatch):
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+    monkeypatch.setattr(e, "complete", lambda *a, **kw: json.dumps(
+        {"title": "P", "takeaway": "t", "blocks": [dict(x) for x in DENSE_BLOCKS]}))
+    req = BuildRequest(topic="T", pages=1, pdfs=1, engine="ollama",
+                       out_dir=tmp_path / "cmp")
+    b.compare_models(req, ["qwen2.5:7b", "llama3.1:8b"])
+    folders = sorted(p.name for p in (tmp_path / "cmp").iterdir() if p.is_dir())
+    assert folders == ["llama3-1-8b", "qwen2-5-7b"]       # one sample each, comparable
+
+
+def test_a_failing_model_does_not_stop_the_comparison(tmp_path: Path, monkeypatch):
+    import kinetixai.primers.builder as b
+    import kinetixai.primers.engines as e
+    monkeypatch.setattr(b, "_research", lambda *a, **kw: [])
+
+    def fake(engine, model, system, user, api_base=None, max_tokens=None, num_ctx=None):
+        if model == "broken":
+            raise e.EngineError("model not found")
+        return json.dumps({"title": "P", "takeaway": "t",
+                           "blocks": [dict(x) for x in DENSE_BLOCKS]})
+
+    monkeypatch.setattr(e, "complete", fake)
+    req = BuildRequest(topic="T", pages=1, pdfs=0, engine="ollama",
+                       out_dir=tmp_path / "cmp")
+    rows = b.compare_models(req, ["broken", "working"])
+    assert rows[0]["ok"] is False and "model not found" in rows[0]["error"]
+    assert rows[1]["ok"] is True                           # the rest still ran

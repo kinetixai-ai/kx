@@ -736,6 +736,67 @@ def primers_build(
     _run_build(req, json_out)
 
 
+@primers_app.command("compare")
+def primers_compare(
+    topic: str = typer.Option(..., "--topic", "-t", help="Topic to sample."),
+    models: str = typer.Option("", "--models", "-m",
+                               help="Comma list. Default: every chat model the engine serves."),
+    engine: Optional[str] = typer.Option(None, "--engine",
+                                         help="Which backend the models belong to."),
+    source: Optional[str] = typer.Option(None, "--source", "-s"),
+    persona: str = typer.Option("student", "--persona"),
+    pages: int = typer.Option(1, "--pages", min=1, max=4,
+                              help="Pages per candidate. 1 is usually enough to judge."),
+    api_base: Optional[str] = typer.Option(None, "--api-base"),
+    num_ctx: Optional[int] = typer.Option(None, "--num-ctx", min=2048),
+    out_dir: Path = typer.Option(Path("./dist/compare"), "--out-dir", "-o"),
+    json_out: bool = JSON,
+) -> None:
+    """Build the same sample with several models and show time and density.
+
+    Finding out after an eight-page run that a model is too slow or writes
+    thin pages is expensive. This builds one page per candidate so you can
+    read them side by side and then set the winner with
+    `kx config set primer_model <name>`.
+    """
+    primers_builder, _, primers_engines, _, _ = _primer_deps()
+    from .primers import providers as pv
+    name = _check_engine(engine or config.get("primer_engine", "auto"), primers_engines)
+    if name == "auto":
+        name, why = pv.pick()
+        if not json_out:
+            output.err.print(f"[dim]engine: {name} ({why})[/dim]")
+    wanted = [m.strip() for m in models.split(",") if m.strip()]
+    if not wanted:
+        provider = pv.get(name)
+        wanted = pv.chat_models(provider) if provider and provider.local else []
+        if not wanted:
+            output.error("pass --models with the names to compare "
+                         f"(no local models found for engine '{name}').")
+            raise typer.Exit(code=2)
+        if not json_out:
+            output.err.print(f"[dim]comparing {len(wanted)} models served by {name}[/dim]")
+
+    req = primers_builder.BuildRequest(
+        topic=topic, source=source,
+        personas=[p.strip() for p in persona.split(",") if p.strip()],
+        pages=pages, pdfs=1, ppts=0, images=0, jsons=0,
+        engine=name, api_base=api_base, num_ctx=num_ctx,
+        watermark=config.get("primer_watermark", "Narmadya Innovations"),
+        out_dir=out_dir)
+    log = (lambda s: None) if json_out else (lambda s: output.err.print(f"[dim]{s}[/dim]"))
+    rows = primers_builder.compare_models(req, wanted, log=log)
+    if json_out:
+        output.emit_json({"engine": name, "topic": topic, "results": rows})
+        return
+    output.compare_table(rows)
+    good = [r for r in rows if r.get("ok")]
+    if good:
+        best = min(good, key=lambda r: (-r["met_quota"], r["seconds"]))
+        output.console.print(f"\n[dim]fastest that met the quota:[/dim] [bold]{best['model']}[/bold]")
+        output.console.print(f"[dim]keep it:[/dim] kx config set primer_model {best['model']}")
+
+
 @primers_app.command("engines")
 def primers_engines_cmd(
     check: bool = typer.Option(True, "--check/--no-check",
